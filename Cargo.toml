@@ -1,0 +1,33 @@
+[package]
+name = "pulse"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pulse"
+path = "src/main.rs"
+
+[dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# UI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# MQTT
+rumqttc = "0.24"
+
+# Config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0.102"
+arboard = "3"
+chrono = { version = "0.4", features = ["clock"] }
