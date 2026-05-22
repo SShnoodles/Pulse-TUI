@@ -1,24 +1,6 @@
-# pulse-tui
+# Pulse-TUI
 
 A real-time terminal monitor (TUI) built in Rust. Currently focused on MQTT, with planned support for Modbus, Serial, and more.
-
-```
-┌──────────────────────────────────────────────────────────┐
-│ PULSE  │  ● Connected  │  localhost:1883  │  3 topics  │ MQTT 3.1.1 │
-├─────────────────────────┬────────────────────────────────┤
-│ Topics (3)              │ Messages — sensors/temp        │
-│                         │                                │
-│ ▶ sensors/temp  12  3t/s│ [10:22:01]  QoS0              │
-│   plc/status     3      │ sensors/temp                   │
-│   motor/rpm      8  1t/s│ {"value": 23.4, "unit": "°C"} │
-│                         │                                │
-│  Esc: all  d: delete    │ [10:22:03]  QoS0              │
-│                         │ sensors/temp                   │
-│                         │ {"value": 23.6, "unit": "°C"} │
-├─────────────────────────┴────────────────────────────────┤
-│  Tab switch   s subscribe   / search   Space pause   q quit │
-└──────────────────────────────────────────────────────────┘
-```
 
 ## Features
 
@@ -131,41 +113,13 @@ pulse -b 192.168.1.10 -p 1883
 Settings are saved automatically to `~/.pulse-tui.toml` on connect:
 
 ```toml
-broker = "localhost"
-port = "1883"
+[mqtt]
+host = "localhost"
+port = 1883
 username = ""
 version = "v311"   # or "v5"
 topics = ["sensors/#", "plc/status"]
 ```
-
-## Architecture
-
-```
-┌──────────────────────────────────────────┐
-│              Source Layer                │
-│  MqttSource (v3.1.1 / v5)  ···  future  │
-└──────────────┬───────────────────────────┘
-               │  AppEvent
-               ▼
-┌──────────────────────────────────────────┐
-│         Event Bus (tokio mpsc)           │
-│  EventTx (cloneable)  EventRx (main)     │
-└──────────────┬───────────────────────────┘
-               │
-               ▼
-┌──────────────────────────────────────────┐
-│              AppState                    │
-│  add_message / on_tick / navigation …    │
-└──────────────┬───────────────────────────┘
-               │
-               ▼
-┌──────────────────────────────────────────┐
-│           UI Render (ratatui)            │
-│  draw_connect()   draw()                 │
-└──────────────────────────────────────────┘
-```
-
-All protocol sources emit a common `AppEvent`, keeping the UI fully decoupled from transport details. State is mutated exclusively in the main event loop — no shared mutable state across tasks.
 
 ## Roadmap
 
