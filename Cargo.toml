@@ -2,6 +2,10 @@
 name = "pulse"
 version = "0.1.0"
 edition = "2021"
+description = "Modern IoT TUI monitor"
+license = "MIT"
+repository = "https://github.com/SShnoodles/Pulse-TUI"
+homepage = "https://github.com/SShnoodles/Pulse-TUI"
 
 [[bin]]
 name = "pulse"
@@ -31,3 +35,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0.102"
 arboard = "3"
 chrono = { version = "0.4", features = ["clock"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
