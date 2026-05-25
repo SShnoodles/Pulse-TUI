@@ -3,13 +3,14 @@ use std::time::Duration;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::mpsc;
 
+use super::config::MqttConfig;
 use crate::core::{AppEvent, MqttMessage, MqttVersion, Source};
 use crate::events::EventTx;
-use super::config::MqttConfig;
 
 pub enum MqttCommand {
     Subscribe(String),
     Unsubscribe(String),
+    Publish { topic: String, payload: String },
 }
 
 pub struct MqttSource {
@@ -27,16 +28,13 @@ impl MqttSource {
     pub async fn run(self) {
         match self.config.version {
             MqttVersion::V311 => self.run_v311().await,
-            MqttVersion::V5   => self.run_v5().await,
+            MqttVersion::V5 => self.run_v5().await,
         }
     }
 
     async fn run_v311(mut self) {
-        let mut opts = MqttOptions::new(
-            &self.config.client_id,
-            &self.config.host,
-            self.config.port,
-        );
+        let mut opts =
+            MqttOptions::new(&self.config.client_id, &self.config.host, self.config.port);
         opts.set_keep_alive(Duration::from_secs(self.config.keep_alive_secs));
 
         if let Some(username) = &self.config.username {
@@ -47,7 +45,9 @@ impl MqttSource {
 
         for topic in &self.config.topics {
             if let Err(e) = client.subscribe(topic, QoS::AtMostOnce).await {
-                let _ = self.tx.send(AppEvent::Error(format!("subscribe failed: {e}")));
+                let _ = self
+                    .tx
+                    .send(AppEvent::Error(format!("subscribe failed: {e}")));
             }
         }
 
@@ -93,6 +93,11 @@ impl MqttSource {
                         Some(MqttCommand::Unsubscribe(topic)) => {
                             let _ = client.unsubscribe(&topic).await;
                         }
+                        Some(MqttCommand::Publish { topic, payload }) => {
+                            if let Err(e) = client.publish(&topic, QoS::AtMostOnce, false, payload.into_bytes()).await {
+                                let _ = self.tx.send(AppEvent::Error(format!("publish failed: {e}")));
+                            }
+                        }
                         None => break,
                     }
                 }
@@ -115,8 +120,13 @@ impl MqttSource {
         let (client, mut eventloop) = rumqttc::v5::AsyncClient::new(opts, 128);
 
         for topic in &self.config.topics {
-            if let Err(e) = client.subscribe(topic, rumqttc::v5::mqttbytes::QoS::AtMostOnce).await {
-                let _ = self.tx.send(AppEvent::Error(format!("subscribe failed: {e}")));
+            if let Err(e) = client
+                .subscribe(topic, rumqttc::v5::mqttbytes::QoS::AtMostOnce)
+                .await
+            {
+                let _ = self
+                    .tx
+                    .send(AppEvent::Error(format!("subscribe failed: {e}")));
             }
         }
 
@@ -165,6 +175,11 @@ impl MqttSource {
                         }
                         Some(MqttCommand::Unsubscribe(topic)) => {
                             let _ = client.unsubscribe(&topic).await;
+                        }
+                        Some(MqttCommand::Publish { topic, payload }) => {
+                            if let Err(e) = client.publish(&topic, rumqttc::v5::mqttbytes::QoS::AtMostOnce, false, payload.into_bytes()).await {
+                                let _ = self.tx.send(AppEvent::Error(format!("publish failed: {e}")));
+                            }
                         }
                         None => break,
                     }

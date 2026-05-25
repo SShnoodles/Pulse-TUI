@@ -190,6 +190,8 @@ async fn run(
                 AppEvent::Paste(s) => {
                     if mode == AppMode::Connect {
                         form.paste(&s);
+                    } else if state.publish_mode {
+                        state.publish_input.push_str(&s);
                     } else if state.subscribe_mode {
                         state.subscribe_input.push_str(&s);
                     } else if state.search_mode {
@@ -371,6 +373,31 @@ async fn run(
                         _ => {}
                     },
 
+                    AppMode::Monitor if state.publish_mode => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            state.publish_mode = false;
+                            state.publish_input.clear();
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            if let Some(topic) = state.selected_topic_name().map(str::to_string) {
+                                let payload = state.publish_input.trim().to_string();
+                                if let Some(ref cmd_tx) = mqtt_cmd {
+                                    let _ = cmd_tx.send(MqttCommand::Publish { topic, payload });
+                                }
+                            }
+                            state.publish_mode = false;
+                            state.publish_input.clear();
+                        }
+                        (KeyModifiers::NONE, KeyCode::Backspace) => {
+                            state.publish_input.pop();
+                        }
+                        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                            state.publish_input.push(c);
+                        }
+                        _ => {}
+                    },
+
                     AppMode::Monitor => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
                         | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
@@ -398,6 +425,12 @@ async fn run(
                         (KeyModifiers::NONE, KeyCode::Char('/')) => state.enter_search(),
                         (KeyModifiers::NONE, KeyCode::Char('s')) => {
                             state.subscribe_mode = true;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char('p'))
+                            if state.selected_topic_idx.is_some() =>
+                        {
+                            state.publish_mode = true;
+                            state.publish_input.clear();
                         }
                         (KeyModifiers::NONE, KeyCode::Char('y')) => {
                             if state.paused {

@@ -135,7 +135,7 @@ topics = ["sensors/#", "plc/status"]
 
 ## Roadmap
 
-- [ ] MQTT publish from TUI
+- [x] MQTT publish from TUI
 - [ ] Modbus source
 - [ ] Serial source
 - [ ] `pulse mqtt` / `pulse modbus` subcommand model

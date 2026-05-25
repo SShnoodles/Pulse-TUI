@@ -2,13 +2,18 @@
 pub struct TopicItem {
     pub name: String,
     pub msg_count: u64,
-    pub tps: u64,           // messages/sec (updated each second)
-    pub tps_counter: u64,   // accumulator for current second
+    pub tps: u64,         // messages/sec (updated each second)
+    pub tps_counter: u64, // accumulator for current second
 }
 
 impl TopicItem {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), msg_count: 0, tps: 0, tps_counter: 0 }
+        Self {
+            name: name.into(),
+            msg_count: 0,
+            tps: 0,
+            tps_counter: 0,
+        }
     }
 }
 
@@ -37,6 +42,8 @@ pub struct AppState {
     pub search_query: String,
     pub subscribe_mode: bool,
     pub subscribe_input: String,
+    pub publish_mode: bool,
+    pub publish_input: String,
     pub broker: String,
     /// None = show all topics; Some(i) = filter by topics[i]
     pub selected_topic_idx: Option<usize>,
@@ -74,6 +81,8 @@ impl Default for AppState {
             search_query: String::new(),
             subscribe_mode: false,
             subscribe_input: String::new(),
+            publish_mode: false,
+            publish_input: String::new(),
             broker: String::new(),
             selected_topic_idx: None,
             topics: Vec::new(),
@@ -95,7 +104,10 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new(broker: impl Into<String>) -> Self {
-        Self { broker: broker.into(), ..Self::default() }
+        Self {
+            broker: broker.into(),
+            ..Self::default()
+        }
     }
 
     pub fn toggle_pause(&mut self) {
@@ -108,7 +120,9 @@ impl AppState {
 
     pub fn exit_search(&mut self, clear: bool) {
         self.search_mode = false;
-        if clear { self.search_query.clear(); }
+        if clear {
+            self.search_query.clear();
+        }
     }
 
     pub fn push_search(&mut self, c: char) {
@@ -122,9 +136,11 @@ impl AppState {
     // ── Topic navigation ────────────────────────────────────────────────────
 
     pub fn select_topic_next(&mut self) {
-        if self.topics.is_empty() { return; }
+        if self.topics.is_empty() {
+            return;
+        }
         self.selected_topic_idx = Some(match self.selected_topic_idx {
-            None    => 0,
+            None => 0,
             Some(i) => (i + 1).min(self.topics.len() - 1),
         });
         self.msg_cursor = None;
@@ -133,7 +149,7 @@ impl AppState {
     pub fn select_topic_prev(&mut self) {
         self.selected_topic_idx = match self.selected_topic_idx {
             None | Some(0) => None,
-            Some(i)        => Some(i - 1),
+            Some(i) => Some(i - 1),
         };
         self.msg_cursor = None;
     }
@@ -153,16 +169,20 @@ impl AppState {
 
     pub fn select_msg_prev(&mut self) {
         let count = self.filtered_messages().count();
-        if count == 0 { return; }
+        if count == 0 {
+            return;
+        }
         self.msg_cursor = Some(match self.msg_cursor {
-            None    => count.saturating_sub(1),
+            None => count.saturating_sub(1),
             Some(i) => i.saturating_sub(1),
         });
     }
 
     pub fn select_msg_next(&mut self) {
         let count = self.filtered_messages().count();
-        if count == 0 { return; }
+        if count == 0 {
+            return;
+        }
         match self.msg_cursor {
             None => {}
             Some(i) => {
@@ -185,7 +205,11 @@ impl AppState {
     pub fn enter_yank_mode(&mut self) {
         if self.msg_cursor.is_none() {
             let count = self.filtered_messages().count();
-            if count > 0 { self.msg_cursor = Some(count.saturating_sub(1)); } else { return; }
+            if count > 0 {
+                self.msg_cursor = Some(count.saturating_sub(1));
+            } else {
+                return;
+            }
         }
         self.yank_mode = true;
         self.yank_start = 0;
@@ -199,7 +223,9 @@ impl AppState {
     }
 
     pub fn yank_left(&mut self) {
-        if self.yank_cursor == 0 { return; }
+        if self.yank_cursor == 0 {
+            return;
+        }
         if let Some(msg) = self.selected_message() {
             if let Some((i, _)) = msg.payload[..self.yank_cursor].char_indices().next_back() {
                 self.yank_cursor = i;
@@ -209,7 +235,9 @@ impl AppState {
 
     pub fn yank_right(&mut self) {
         if let Some(msg) = self.selected_message() {
-            if self.yank_cursor >= msg.payload.len() { return; }
+            if self.yank_cursor >= msg.payload.len() {
+                return;
+            }
             let c = msg.payload[self.yank_cursor..].chars().next().unwrap();
             self.yank_cursor += c.len_utf8();
         }
@@ -218,17 +246,23 @@ impl AppState {
     pub fn yank_text(&self) -> Option<String> {
         let msg = self.selected_message()?;
         let start = self.yank_start.min(self.yank_cursor).min(msg.payload.len());
-        let end   = self.yank_start.max(self.yank_cursor).min(msg.payload.len());
-        if start == end { Some(msg.payload.clone()) } else { Some(msg.payload[start..end].to_string()) }
+        let end = self.yank_start.max(self.yank_cursor).min(msg.payload.len());
+        if start == end {
+            Some(msg.payload.clone())
+        } else {
+            Some(msg.payload[start..end].to_string())
+        }
     }
 
     // ── Message filtering ────────────────────────────────────────────────────
 
     pub fn filtered_messages(&self) -> impl Iterator<Item = &Message> {
-        let q     = self.search_query.to_lowercase();
+        let q = self.search_query.to_lowercase();
         let topic = self.selected_topic_name().unwrap_or("").to_string();
         self.messages.iter().filter(move |m| {
-            if !topic.is_empty() && m.topic != topic { return false; }
+            if !topic.is_empty() && m.topic != topic {
+                return false;
+            }
             if !q.is_empty()
                 && !m.topic.to_lowercase().contains(&q)
                 && !m.payload.to_lowercase().contains(&q)
@@ -251,12 +285,16 @@ impl AppState {
     }
 
     pub fn add_message(&mut self, msg: MqttMessage) {
-        if self.paused { return; }
+        if self.paused {
+            return;
+        }
 
         // Drop messages for non-selected topics when a topic is focused
         if let Some(idx) = self.selected_topic_idx {
             if let Some(selected) = self.topics.get(idx) {
-                if selected.name != msg.topic { return; }
+                if selected.name != msg.topic {
+                    return;
+                }
             }
         }
 
