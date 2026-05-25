@@ -1,5 +1,8 @@
 # Pulse-TUI
 
+![GitHub release](https://img.shields.io/github/v/release/sshnoodles/Pulse-TUI)
+![Downloads](https://img.shields.io/github/downloads/sshnoodles/Pulse-TUI/total)
+
 A real-time terminal monitor (TUI) built in Rust. Currently focused on MQTT, with planned support for Modbus, Serial, and more.
 
 ![modbus](assets/modbus.png)
@@ -19,15 +22,22 @@ A real-time terminal monitor (TUI) built in Rust. Currently focused on MQTT, wit
 
 ## Install
 
-```bash
-cargo build --release
-# binary at ./target/release/pulse
+### Install prebuilt binaries via shell script
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/SShnoodles/Pulse-TUI/releases/latest/download/pulse-installer.sh | sh
 ```
 
-Or install directly into `~/.cargo/bin`:
+### Install prebuilt binaries via powershell script
 
-```bash
-cargo install --path .
+```sh
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/SShnoodles/Pulse-TUI/releases/latest/download/pulse-installer.ps1 | iex"
+```
+
+### Install prebuilt binaries via Homebrew
+
+```sh
+brew install sshnoodles/tap/pulse
 ```
 
 ## Usage
