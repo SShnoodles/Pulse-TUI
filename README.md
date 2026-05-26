@@ -5,7 +5,7 @@
 
 A real-time terminal monitor (TUI) built in Rust. Supports MQTT and Modbus TCP, with planned support for Serial and more.
 
-![modbus](assets/modbus.png)
+![tui](assets/tui.png)
 
 ## Features
 
