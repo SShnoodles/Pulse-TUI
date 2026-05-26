@@ -55,26 +55,10 @@ brew install sshnoodles/tap/pulse
 
 ## Usage
 
-```
-pulse [OPTIONS]
-
-Options:
-  -b, --broker <HOST>       MQTT broker host [default: localhost]
-  -p, --port <PORT>         MQTT broker port [default: 1883]
-  -t, --topics <TOPIC>...   Topics to subscribe (repeat for multiple)
-      --client-id <ID>      MQTT client ID [default: pulse-tui]
-  -h, --help                Print help
-  -V, --version             Print version
-```
-
-Examples:
+Just run `pulse` — no arguments needed. All settings are restored from `~/.pulse-tui.toml` on launch.
 
 ```bash
-# Launch and select protocol interactively
 pulse
-
-# Connect to a remote MQTT broker and subscribe to specific topics
-pulse -b mqtt.example.com -t sensors/# -t plc/status
 ```
 
 ## Key Bindings
@@ -198,7 +182,6 @@ poll_interval_ms = 1000
 | [tokio](https://tokio.rs) | Async runtime |
 | [rumqttc](https://github.com/bytebeamio/rumqtt) | MQTT client |
 | [tokio-modbus](https://github.com/slowtec/tokio-modbus) | Modbus TCP client |
-| [clap](https://github.com/clap-rs/clap) | CLI argument parsing |
 | [serde](https://serde.rs) + [toml](https://github.com/toml-rs/toml) | Config serialization |
 | [arboard](https://github.com/1Password/arboard) | Clipboard access |
 | [tracing](https://github.com/tokio-rs/tracing) | Logging |

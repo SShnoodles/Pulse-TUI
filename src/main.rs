@@ -1,4 +1,3 @@
-mod cli;
 mod config;
 mod core;
 mod events;
@@ -8,7 +7,6 @@ mod ui;
 
 use std::{io::stdout, time::Duration};
 
-use clap::Parser;
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -21,7 +19,6 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    cli::Args,
     core::{
         AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow, SourceKind,
     },
@@ -46,8 +43,6 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let args = Args::parse();
-
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(
@@ -59,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run(&mut terminal, &args).await;
+    let result = run(&mut terminal).await;
 
     disable_raw_mode()?;
     execute!(
@@ -73,33 +68,17 @@ async fn main() -> anyhow::Result<()> {
     result
 }
 
-async fn run(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    args: &Args,
-) -> anyhow::Result<()> {
+async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyhow::Result<()> {
     let (tx, mut rx) = new_event_channel();
 
-    // Load saved config; CLI args take priority over saved values
+    // Load saved config
     let saved = config::load();
-    let mut form = ConnectForm::new(&args.broker, args.port);
-    if args.broker == "localhost" {
-        form.values[0] = saved.mqtt.host.clone();
-    }
-    if args.port == 1883 {
-        form.values[1] = saved.mqtt.port.to_string();
-    }
-    if !saved.mqtt.username.is_empty() {
-        form.values[2] = saved.mqtt.username.clone();
-    }
+    let mut form = ConnectForm::new(&saved.mqtt.host, saved.mqtt.port);
+    form.values[2] = saved.mqtt.username.clone();
     form.mqtt_version = saved.mqtt_version();
 
-    // Merge CLI topics + saved topics (deduplicated)
-    let mut initial_topics: Vec<String> = args.topics.clone();
-    for t in &saved.mqtt.topics {
-        if !initial_topics.contains(t) {
-            initial_topics.push(t.clone());
-        }
-    }
+    // Initial topics from saved config
+    let mut initial_topics: Vec<String> = saved.mqtt.topics.clone();
     let mut mode = AppMode::SourceSelect;
     let mut source_select_idx: usize = 0;
     let mut state = AppState::default();
