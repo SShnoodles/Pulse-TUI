@@ -3,22 +3,35 @@
 ![GitHub release](https://img.shields.io/github/v/release/sshnoodles/Pulse-TUI)
 ![Downloads](https://img.shields.io/github/downloads/sshnoodles/Pulse-TUI/total)
 
-A real-time terminal monitor (TUI) built in Rust. Currently focused on MQTT, with planned support for Modbus, Serial, and more.
+A real-time terminal monitor (TUI) built in Rust. Supports MQTT and Modbus TCP, with planned support for Serial and more.
 
 ![modbus](assets/modbus.png)
 
 ## Features
 
-- Live MQTT message stream with per-topic filtering
+### MQTT
+- Live message stream with per-topic filtering
 - JSON syntax highlighting
 - Message search with inline match highlighting
 - Yank mode — copy message payload to clipboard (when paused)
 - Subscribe / unsubscribe to topics at runtime
+- Publish messages to selected topic
 - Per-topic message count and TPS (messages/sec) stats
 - MQTT 3.1.1 and MQTT v5 support
 - Username / password authentication
 - Auto-reconnect on disconnect
-- Config persisted to `~/.pulse-tui.toml` (broker, port, topics, version)
+
+### Modbus TCP
+- Connect to any Modbus TCP device by host, port, and unit ID
+- Query registers via Function Code selector (FC01 Coil, FC02 Discrete, FC03 Holding, FC04 Input)
+- Configurable start address and quantity
+- Live tabular view: Address, Hex, Binary, and interpreted Display columns
+- Multiple display formats: Unsigned, Signed, Hex, Binary, Long, Long Inverse, Float, Float Inverse, Double, Double Inverse
+- Auto-reconnect on disconnect
+
+### General
+- Protocol selector on launch (MQTT / Modbus TCP)
+- Config persisted to `~/.pulse-tui.toml` (all connection settings restored on next launch)
 
 ## Install
 
@@ -46,8 +59,8 @@ brew install sshnoodles/tap/pulse
 pulse [OPTIONS]
 
 Options:
-  -b, --broker <HOST>       Broker host [default: localhost]
-  -p, --port <PORT>         Broker port [default: 1883]
+  -b, --broker <HOST>       MQTT broker host [default: localhost]
+  -p, --port <PORT>         MQTT broker port [default: 1883]
   -t, --topics <TOPIC>...   Topics to subscribe (repeat for multiple)
       --client-id <ID>      MQTT client ID [default: pulse-tui]
   -h, --help                Print help
@@ -57,19 +70,26 @@ Options:
 Examples:
 
 ```bash
-# Connect to local broker and subscribe to all topics
+# Launch and select protocol interactively
 pulse
 
-# Connect to a remote broker and subscribe to specific topics
+# Connect to a remote MQTT broker and subscribe to specific topics
 pulse -b mqtt.example.com -t sensors/# -t plc/status
-
-# Use MQTT v5 (selectable in the connect form)
-pulse -b 192.168.1.10 -p 1883
 ```
 
 ## Key Bindings
 
-### Connect form
+### Protocol select
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move selection |
+| `Enter` | Confirm |
+| `M` | Go to MQTT connect form |
+| `B` | Go to Modbus TCP connect form |
+| `q` / `Ctrl+C` | Quit |
+
+### Connect form (MQTT & Modbus TCP)
 
 | Key | Action |
 |-----|--------|
@@ -77,10 +97,10 @@ pulse -b 192.168.1.10 -p 1883
 | `Shift+Tab` / `↑` | Previous field |
 | `←` / `→` / `Space` | Toggle MQTT version (on version field) |
 | `Enter` | Connect |
-| `Esc` | Connect without credentials |
+| `Esc` | Back to protocol select |
 | `Ctrl+C` | Quit |
 
-### Monitor — normal mode
+### MQTT Monitor — normal mode
 
 | Key | Action |
 |-----|--------|
@@ -88,14 +108,15 @@ pulse -b 192.168.1.10 -p 1883
 | `↑` / `↓` | Navigate topics or messages |
 | `Space` | Pause / resume message stream |
 | `/` | Enter search mode |
-| `s` | Enter subscribe mode (add a new topic) |
+| `s` | Enter subscribe mode |
 | `d` | Delete selected topic (Topics panel) |
+| `p` | Publish to selected topic |
 | `y` | Enter yank (copy) mode — only when paused |
 | `Esc` | Clear topic filter / open disconnect dialog |
 | `c` | Clear error bar |
 | `q` / `Ctrl+C` | Quit |
 
-### Search mode
+### MQTT Monitor — search mode
 
 | Key | Action |
 |-----|--------|
@@ -103,7 +124,7 @@ pulse -b 192.168.1.10 -p 1883
 | `Enter` | Confirm and keep filter |
 | `Esc` | Cancel and clear filter |
 
-### Subscribe mode
+### MQTT Monitor — subscribe mode
 
 | Key | Action |
 |-----|--------|
@@ -111,7 +132,7 @@ pulse -b 192.168.1.10 -p 1883
 | `Enter` | Subscribe |
 | `Esc` | Cancel |
 
-### Yank mode (active when paused)
+### MQTT Monitor — yank mode (active when paused)
 
 | Key | Action |
 |-----|--------|
@@ -119,6 +140,28 @@ pulse -b 192.168.1.10 -p 1883
 | `y` | Copy selected text to clipboard |
 | `↑` / `↓` | Move to adjacent message |
 | `Esc` | Exit yank mode |
+
+### Modbus TCP Monitor — normal mode
+
+| Key | Action |
+|-----|--------|
+| `e` | Open query edit form |
+| `↑` / `↓` | Scroll data table |
+| `c` | Clear error bar |
+| `Esc` | Open disconnect dialog |
+| `q` / `Ctrl+C` | Quit |
+
+### Modbus TCP Monitor — query edit mode
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `↓` | Next field |
+| `Shift+Tab` / `↑` | Previous field |
+| `←` / `→` | Change Function Code or Display Format |
+| `0–9` | Type start address or quantity |
+| `Backspace` | Delete last digit |
+| `Enter` | Send query |
+| `Esc` | Cancel |
 
 ## Configuration
 
@@ -131,12 +174,18 @@ port = 1883
 username = ""
 version = "v311"   # or "v5"
 topics = ["sensors/#", "plc/status"]
+
+[modbus]
+host = "localhost"
+port = 502
+unit_id = 1
+poll_interval_ms = 1000
 ```
 
 ## Roadmap
 
 - [x] MQTT publish from TUI
-- [ ] Modbus source
+- [x] Modbus TCP source
 - [ ] Serial source
 - [ ] `pulse mqtt` / `pulse modbus` subcommand model
 
@@ -148,6 +197,7 @@ topics = ["sensors/#", "plc/status"]
 | [crossterm](https://github.com/crossterm-rs/crossterm) | Terminal backend |
 | [tokio](https://tokio.rs) | Async runtime |
 | [rumqttc](https://github.com/bytebeamio/rumqtt) | MQTT client |
+| [tokio-modbus](https://github.com/slowtec/tokio-modbus) | Modbus TCP client |
 | [clap](https://github.com/clap-rs/clap) | CLI argument parsing |
 | [serde](https://serde.rs) + [toml](https://github.com/toml-rs/toml) | Config serialization |
 | [arboard](https://github.com/1Password/arboard) | Clipboard access |
