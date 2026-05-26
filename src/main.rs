@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod core;
 mod events;
+mod modbus;
 mod mqtt;
 mod ui;
 
@@ -21,10 +22,13 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     cli::Args,
-    core::{AppEvent, AppMode, AppState, ConnectForm, ConnectStatus},
+    core::{
+        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow, SourceKind,
+    },
     events::{new_event_channel, EventTx},
+    modbus::{ModbusCommand, ModbusConfig, ModbusSource},
     mqtt::{MqttCommand, MqttConfig, MqttSource},
-    ui::{draw, draw_connect, Panel},
+    ui::{draw, draw_connect, draw_modbus_connect, draw_modbus_monitor, draw_source_select, Panel},
 };
 
 fn random_hex_suffix() -> String {
@@ -96,10 +100,17 @@ async fn run(
             initial_topics.push(t.clone());
         }
     }
-    let mut mode = AppMode::Connect;
+    let mut mode = AppMode::SourceSelect;
+    let mut source_select_idx: usize = 0;
     let mut state = AppState::default();
     let mut active_panel = Panel::default();
     let mut mqtt_cmd: Option<UnboundedSender<MqttCommand>> = None;
+    let mut modbus_cmd: Option<UnboundedSender<ModbusCommand>> = None;
+    let mut modbus_form = ModbusForm::new();
+    modbus_form.values[0] = saved.modbus.host.clone();
+    modbus_form.values[1] = saved.modbus.port.to_string();
+    modbus_form.values[2] = saved.modbus.unit_id.to_string();
+    modbus_form.values[3] = saved.modbus.poll_interval_ms.to_string();
 
     // Tick task
     let tick_tx = tx.clone();
@@ -135,11 +146,21 @@ async fn run(
 
     'main: loop {
         match mode {
+            AppMode::SourceSelect => {
+                terminal.draw(|f| draw_source_select(f, source_select_idx))?;
+            }
             AppMode::Connect | AppMode::Connecting => {
                 terminal.draw(|f| draw_connect(f, &form))?;
             }
+            AppMode::ModbusConnect | AppMode::ModbusConnecting => {
+                terminal.draw(|f| draw_modbus_connect(f, &modbus_form))?;
+            }
             AppMode::Monitor => {
-                terminal.draw(|f| draw(f, &state, active_panel))?;
+                if state.source_kind == SourceKind::ModbusTcp {
+                    terminal.draw(|f| draw_modbus_monitor(f, &state))?;
+                } else {
+                    terminal.draw(|f| draw(f, &state, active_panel))?;
+                }
             }
         }
 
@@ -164,32 +185,58 @@ async fn run(
                         state.add_message(msg);
                     }
                 }
+                AppEvent::ModbusData { start, values } => {
+                    if mode == AppMode::Monitor && state.source_kind == SourceKind::ModbusTcp {
+                        state.modbus_rows = values
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, v)| ModbusRow {
+                                address: start.wrapping_add(i as u16),
+                                value: v,
+                            })
+                            .collect();
+                    }
+                }
                 AppEvent::Connected => {
                     state.connected = true;
                     state.last_error = None;
-                    if mode == AppMode::Connecting {
-                        mode = AppMode::Monitor;
-                        form.status = ConnectStatus::Idle;
+                    match mode {
+                        AppMode::Connecting => {
+                            mode = AppMode::Monitor;
+                            form.status = ConnectStatus::Idle;
+                        }
+                        AppMode::ModbusConnecting => {
+                            mode = AppMode::Monitor;
+                            modbus_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
                     }
                 }
                 AppEvent::Disconnected => {
                     state.connected = false;
-                    if mode == AppMode::Connecting {
-                        mqtt_cmd = None; // drop sender → MQTT task stops after current sleep
-                        mode = AppMode::Connect;
+                    match mode {
+                        AppMode::Connecting => {
+                            mqtt_cmd = None;
+                            mode = AppMode::Connect;
+                        }
+                        AppMode::ModbusConnecting => {
+                            modbus_cmd = None;
+                            mode = AppMode::ModbusConnect;
+                        }
+                        _ => {}
                     }
                 }
-                AppEvent::Error(e) => {
-                    if mode == AppMode::Connecting {
-                        form.status = ConnectStatus::Error(e);
-                    } else {
-                        state.last_error = Some(e);
-                    }
-                }
+                AppEvent::Error(e) => match mode {
+                    AppMode::Connecting => form.status = ConnectStatus::Error(e),
+                    AppMode::ModbusConnecting => modbus_form.status = ConnectStatus::Error(e),
+                    _ => state.last_error = Some(e),
+                },
 
                 AppEvent::Paste(s) => {
                     if mode == AppMode::Connect {
                         form.paste(&s);
+                    } else if mode == AppMode::ModbusConnect {
+                        modbus_form.paste(&s);
                     } else if state.publish_mode {
                         state.publish_input.push_str(&s);
                     } else if state.subscribe_mode {
@@ -200,6 +247,85 @@ async fn run(
                 }
 
                 AppEvent::Key(key) => match mode {
+                    AppMode::SourceSelect => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c'))
+                        | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Up) => {
+                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(1);
+                        }
+                        (KeyModifiers::NONE, KeyCode::Down) => {
+                            source_select_idx = (source_select_idx + 1) % 2;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            if source_select_idx == 0 {
+                                mode = AppMode::Connect;
+                            } else {
+                                mode = AppMode::ModbusConnect;
+                            }
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char('m'))
+                        | (KeyModifiers::NONE, KeyCode::Char('1')) => {
+                            mode = AppMode::Connect;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char('b'))
+                        | (KeyModifiers::NONE, KeyCode::Char('2')) => {
+                            mode = AppMode::ModbusConnect;
+                        }
+                        _ => {}
+                    },
+
+                    AppMode::ModbusConnect => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
+                        | (KeyModifiers::NONE, KeyCode::Down) => modbus_form.next(),
+                        (KeyModifiers::SHIFT, KeyCode::BackTab)
+                        | (KeyModifiers::NONE, KeyCode::Up) => modbus_form.prev(),
+                        (KeyModifiers::NONE, KeyCode::Backspace) => {
+                            modbus_form.backspace();
+                            modbus_form.status = ConnectStatus::Idle;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            config::save(&config::SavedConfig {
+                                mqtt: config::MqttConfig {
+                                    host: saved.mqtt.host.clone(),
+                                    port: saved.mqtt.port,
+                                    username: saved.mqtt.username.clone(),
+                                    version: saved.mqtt.version.clone(),
+                                    topics: saved.mqtt.topics.clone(),
+                                },
+                                modbus: config::ModbusPersistedConfig {
+                                    host: modbus_form.values[0].clone(),
+                                    port: modbus_form.values[1].parse().unwrap_or(502),
+                                    unit_id: modbus_form.values[2].parse().unwrap_or(1),
+                                    poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
+                                },
+                            });
+                            state.mqtt_version = "Modbus TCP";
+                            state.source_kind = SourceKind::ModbusTcp;
+                            modbus_form.status = ConnectStatus::Connecting;
+                            modbus_cmd = Some(spawn_modbus(&modbus_form, &tx));
+                            mode = AppMode::ModbusConnecting;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            mode = AppMode::SourceSelect;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char(c)) => {
+                            modbus_form.push(c);
+                            modbus_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
+                    AppMode::ModbusConnecting => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            modbus_cmd = None;
+                            mode = AppMode::ModbusConnect;
+                            modbus_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
                     AppMode::Connect => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
 
@@ -236,6 +362,12 @@ async fn run(
                                     },
                                     topics: initial_topics.clone(),
                                 },
+                                modbus: config::ModbusPersistedConfig {
+                                    host: modbus_form.values[0].clone(),
+                                    port: modbus_form.values[1].parse().unwrap_or(502),
+                                    unit_id: modbus_form.values[2].parse().unwrap_or(1),
+                                    poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
+                                },
                             });
                             state.subscribed_topics = initial_topics.clone();
                             state.auto_select_first = !initial_topics.is_empty();
@@ -245,27 +377,7 @@ async fn run(
                             mode = AppMode::Connecting;
                         }
                         (KeyModifiers::NONE, KeyCode::Esc) => {
-                            config::save(&config::SavedConfig {
-                                mqtt: config::MqttConfig {
-                                    host: form.values[0].clone(),
-                                    port: form.values[1].parse().unwrap_or(1883),
-                                    username: form.values[2].clone(),
-                                    version: if form.mqtt_version == crate::core::MqttVersion::V5 {
-                                        "v5".into()
-                                    } else {
-                                        "v311".into()
-                                    },
-                                    topics: initial_topics.clone(),
-                                },
-                            });
-                            form.values[2].clear();
-                            form.values[3].clear();
-                            state.subscribed_topics = initial_topics.clone();
-                            state.auto_select_first = !initial_topics.is_empty();
-                            state.mqtt_version = form.mqtt_version.label();
-                            form.status = ConnectStatus::Connecting;
-                            mqtt_cmd = Some(spawn_mqtt(&form, &initial_topics, &tx));
-                            mode = AppMode::Connecting;
+                            mode = AppMode::SourceSelect;
                         }
                         (KeyModifiers::NONE, KeyCode::Char(c)) => {
                             form.push(c);
@@ -284,14 +396,92 @@ async fn run(
                         _ => {}
                     },
 
+                    // ── Modbus monitor: editing query form ────────────────
+                    AppMode::Monitor
+                        if state.source_kind == SourceKind::ModbusTcp
+                            && state.modbus_query.editing =>
+                    {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Tab)
+                            | (KeyModifiers::NONE, KeyCode::Down) => {
+                                state.modbus_query.next_field();
+                            }
+                            (KeyModifiers::SHIFT, KeyCode::BackTab)
+                            | (KeyModifiers::NONE, KeyCode::Up) => {
+                                state.modbus_query.prev_field();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Left) => {
+                                state.modbus_query.left();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Right) => {
+                                state.modbus_query.right();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                                state.modbus_query.backspace();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char(c)) => {
+                                state.modbus_query.push(c);
+                            }
+                            (KeyModifiers::NONE, KeyCode::Enter) => {
+                                let fc = state.modbus_query.fc();
+                                let start = state.modbus_query.start();
+                                let qty = state.modbus_query.qty();
+                                state.modbus_query.editing = false;
+                                state.modbus_table_offset = 0;
+                                if let Some(ref cmd_tx) = modbus_cmd {
+                                    let _ = cmd_tx.send(ModbusCommand::SetQuery {
+                                        fc,
+                                        start,
+                                        quantity: qty,
+                                    });
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.modbus_query.editing = false;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // ── Modbus monitor: normal navigation ─────────────────────
+                    AppMode::Monitor if state.source_kind == SourceKind::ModbusTcp => {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c'))
+                            | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Char('e')) => {
+                                state.modbus_query.editing = true;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Up) => {
+                                state.modbus_table_offset =
+                                    state.modbus_table_offset.saturating_sub(1);
+                            }
+                            (KeyModifiers::NONE, KeyCode::Down) => {
+                                let max = state.modbus_rows.len().saturating_sub(1);
+                                if state.modbus_table_offset < max {
+                                    state.modbus_table_offset += 1;
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                                state.last_error = None;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.confirm_back = true;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     AppMode::Monitor if state.confirm_back => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
                         (KeyModifiers::NONE, KeyCode::Char('y'))
                         | (KeyModifiers::NONE, KeyCode::Enter) => {
                             mqtt_cmd = None;
+                            modbus_cmd = None;
                             state = AppState::default();
-                            mode = AppMode::Connect;
+                            mode = AppMode::SourceSelect;
                             form.status = ConnectStatus::Idle;
+                            modbus_form.status = ConnectStatus::Idle;
                         }
                         _ => {
                             state.confirm_back = false;
@@ -306,7 +496,7 @@ async fn run(
                         }
                         (KeyModifiers::NONE, KeyCode::Enter) => {
                             let topic = state.subscribe_input.trim().to_string();
-                            if !topic.is_empty() {
+                            if !topic.is_empty() && state.source_kind == SourceKind::Mqtt {
                                 if let Some(ref cmd_tx) = mqtt_cmd {
                                     let _ = cmd_tx.send(MqttCommand::Subscribe(topic.clone()));
                                 }
@@ -423,11 +613,14 @@ async fn run(
 
                         (KeyModifiers::NONE, KeyCode::Char(' ')) => state.toggle_pause(),
                         (KeyModifiers::NONE, KeyCode::Char('/')) => state.enter_search(),
-                        (KeyModifiers::NONE, KeyCode::Char('s')) => {
+                        (KeyModifiers::NONE, KeyCode::Char('s'))
+                            if state.source_kind == SourceKind::Mqtt =>
+                        {
                             state.subscribe_mode = true;
                         }
                         (KeyModifiers::NONE, KeyCode::Char('p'))
-                            if state.selected_topic_idx.is_some() =>
+                            if state.selected_topic_idx.is_some()
+                                && state.source_kind == SourceKind::Mqtt =>
                         {
                             state.publish_mode = true;
                             state.publish_input.clear();
@@ -439,7 +632,8 @@ async fn run(
                         }
                         (KeyModifiers::NONE, KeyCode::Char('d'))
                             if active_panel == Panel::Topics
-                                && state.selected_topic_idx.is_some() =>
+                                && state.selected_topic_idx.is_some()
+                                && state.source_kind == SourceKind::Mqtt =>
                         {
                             if let Some(topic) = state.delete_selected_topic() {
                                 if let Some(ref cmd_tx) = mqtt_cmd {
@@ -484,6 +678,18 @@ fn spawn_mqtt(form: &ConnectForm, topics: &[String], tx: &EventTx) -> UnboundedS
     };
 
     let (source, cmd_tx) = MqttSource::new(config, tx.clone());
+    tokio::spawn(source.run());
+    cmd_tx
+}
+
+fn spawn_modbus(form: &ModbusForm, tx: &EventTx) -> UnboundedSender<ModbusCommand> {
+    let config = ModbusConfig {
+        host: form.host().to_string(),
+        port: form.port(),
+        unit_id: form.unit_id(),
+        poll_interval_ms: form.poll_ms(),
+    };
+    let (source, cmd_tx) = ModbusSource::new(config, tx.clone());
     tokio::spawn(source.run());
     cmd_tx
 }

@@ -1,3 +1,3 @@
 mod bus;
 
-pub use bus::{EventRx, EventTx, new_event_channel};
+pub use bus::{new_event_channel, EventTx};

@@ -1,3 +1,11 @@
+use super::mode::{ModbusQueryForm, SourceKind};
+
+#[derive(Debug, Clone)]
+pub struct ModbusRow {
+    pub address: u16,
+    pub value: u16,
+}
+
 #[derive(Debug, Clone)]
 pub struct TopicItem {
     pub name: String,
@@ -70,6 +78,14 @@ pub struct AppState {
     pub subscribed_topics: Vec<String>,
     /// Auto-select first topic when it appears (set when connecting with saved topics)
     pub auto_select_first: bool,
+    /// Which protocol source is active
+    pub source_kind: SourceKind,
+    /// Polled register rows from Modbus source
+    pub modbus_rows: Vec<ModbusRow>,
+    /// Query settings form for Modbus monitor
+    pub modbus_query: ModbusQueryForm,
+    /// Scroll offset for the Modbus data table
+    pub modbus_table_offset: usize,
 }
 
 impl Default for AppState {
@@ -98,6 +114,10 @@ impl Default for AppState {
             tick_count: 0,
             subscribed_topics: Vec::new(),
             auto_select_first: false,
+            source_kind: SourceKind::Mqtt,
+            modbus_rows: Vec::new(),
+            modbus_query: ModbusQueryForm::default(),
+            modbus_table_offset: 0,
         }
     }
 }

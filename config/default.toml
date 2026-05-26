@@ -7,11 +7,12 @@ username = ""
 version  = "v311"       # "v311" = MQTT 3.1.1  |  "v5" = MQTT 5.0
 topics   = []           # e.g. ["sensors/#", "plc/status"]
 
-# [modbus]
-# host    = "localhost"
-# port    = 502
-# unit_id = 1
+[modbus]
+host    = "localhost"
+port    = 502
+unit_id = 1
+poll_interval_ms = 1000
 
-# [serial]
-# port      = "/dev/ttyUSB0"
-# baud_rate = 9600
+[serial]
+port      = "/dev/ttyUSB0"
+baud_rate = 9600

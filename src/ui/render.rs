@@ -9,7 +9,7 @@ use ratatui::{
 use super::highlight::{detect_format, highlight_line};
 use super::panel::Panel;
 use super::style::{border_style, title_style};
-use crate::core::{AppState, Message};
+use crate::core::{AppState, Message, SourceKind};
 
 pub fn draw(frame: &mut Frame, state: &AppState, focus: Panel) {
     let chunks = Layout::vertical([
@@ -300,7 +300,7 @@ fn draw_hints(frame: &mut Frame, area: Rect, state: &AppState) {
             spans.push(Span::styled("y ", Style::new().fg(Color::Cyan)));
             spans.push(Span::styled("yank   ", Style::new().fg(Color::DarkGray)));
         }
-        if state.selected_topic_idx.is_some() {
+        if state.selected_topic_idx.is_some() && state.source_kind == SourceKind::Mqtt {
             spans.push(Span::styled("p ", Style::new().fg(Color::Magenta)));
             spans.push(Span::styled("publish   ", Style::new().fg(Color::DarkGray)));
         }
@@ -538,9 +538,20 @@ fn draw_statusbar(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("cancel", Style::new().fg(Color::DarkGray)),
         ])
     } else if state.subscribe_mode {
+        let label = if state.source_kind == SourceKind::ModbusTcp {
+            "register"
+        } else {
+            "topic"
+        };
         Line::from(vec![
-            Span::styled(" s ", Style::new().fg(Color::Green)),
-            Span::styled("subscribe: ", Style::new().fg(Color::DarkGray)),
+            Span::styled(
+                " SUB ",
+                Style::new()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("  {label}: "), Style::new().fg(Color::DarkGray)),
             Span::styled(state.subscribe_input.clone(), Style::new().fg(Color::White)),
             Span::styled("█", Style::new().fg(Color::White)),
             Span::styled("  Enter ", Style::new().fg(Color::Cyan)),

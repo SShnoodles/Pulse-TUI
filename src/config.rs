@@ -30,7 +30,28 @@ impl Default for MqttConfig {
     }
 }
 
-// Future sources: ModbusConfig, WebSocketConfig, SerialConfig …
+// Future sources: WebSocketConfig, SerialConfig …
+
+/// Persisted settings for the Modbus TCP source  →  [modbus] in ~/.pulse-tui.toml
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModbusPersistedConfig {
+    pub host: String,
+    pub port: u16,
+    pub unit_id: u8,
+    pub poll_interval_ms: u64,
+}
+
+impl Default for ModbusPersistedConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".into(),
+            port: 502,
+            unit_id: 1,
+            poll_interval_ms: 1000,
+        }
+    }
+}
 
 // ── Top-level config ─────────────────────────────────────────────────────────
 
@@ -38,8 +59,7 @@ impl Default for MqttConfig {
 #[serde(default)]
 pub struct SavedConfig {
     pub mqtt: MqttConfig,
-    // pub modbus: ModbusConfig,
-    // pub serial: SerialConfig,
+    pub modbus: ModbusPersistedConfig,
 }
 
 impl SavedConfig {
