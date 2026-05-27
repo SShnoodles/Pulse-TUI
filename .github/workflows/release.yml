@@ -139,6 +139,14 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y \
+              pkg-config \
+              build-essential \
+              libudev-dev \
+              libssl-dev
+          fi
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
