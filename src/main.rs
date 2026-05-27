@@ -293,9 +293,9 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             source_select_idx = (source_select_idx + 1) % 3;
                         }
                         (KeyModifiers::NONE, KeyCode::Enter) => match source_select_idx {
-                            0 => mode = AppMode::SerialConnect,
+                            0 => mode = AppMode::ModbusConnect,
                             1 => mode = AppMode::Connect,
-                            _ => mode = AppMode::ModbusConnect,
+                            _ => mode = AppMode::SerialConnect,
                         },
                         (KeyModifiers::NONE, KeyCode::Char('s'))
                         | (KeyModifiers::NONE, KeyCode::Char('1')) => {

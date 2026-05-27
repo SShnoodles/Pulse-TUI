@@ -3,7 +3,7 @@
 ![GitHub release](https://img.shields.io/github/v/release/sshnoodles/Pulse-TUI)
 ![Downloads](https://img.shields.io/github/downloads/sshnoodles/Pulse-TUI/total)
 
-A real-time terminal monitor (TUI) built in Rust. Supports MQTT and Modbus TCP, with planned support for Serial and more.
+A real-time terminal monitor (TUI) built in Rust. Supports MQTT, Modbus TCP, and Serial port monitoring.
 
 ![tui](assets/tui.png)
 
@@ -29,8 +29,18 @@ A real-time terminal monitor (TUI) built in Rust. Supports MQTT and Modbus TCP, 
 - Multiple display formats: Unsigned, Signed, Hex, Binary, Long, Long Inverse, Float, Float Inverse, Double, Double Inverse
 - Auto-reconnect on disconnect
 
+### Serial
+- Connect to any serial port with configurable baud rate, data bits, parity, and stop bits
+- Timestamped RX / TX log (`hh:mm:ss RX <-` / `hh:mm:ss TX ->`)
+- ASCII and Hex display modes (toggle with `x`)
+- Send messages in ASCII or Hex format
+- Real-time hex input validation (illegal characters, odd digit count)
+- Pause / resume incoming data stream
+- Status bar shows line count, total bytes received, and last message byte count
+- Log capped at 2000 entries
+
 ### General
-- Protocol selector on launch (MQTT / Modbus TCP)
+- Protocol selector on launch (MQTT / Modbus TCP / Serial)
 - Config persisted to `~/.pulse-tui.toml` (all connection settings restored on next launch)
 
 ## Install
@@ -147,6 +157,38 @@ pulse
 | `Enter` | Send query |
 | `Esc` | Cancel |
 
+### Serial connect form
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `↓` | Next field |
+| `Shift+Tab` / `↑` | Previous field |
+| `←` / `→` | Change baud rate, data bits, parity, or stop bits |
+| `r` | Refresh port list |
+| `Enter` | Connect |
+| `Esc` | Back to protocol select |
+| `Ctrl+C` | Quit |
+
+### Serial Monitor — normal mode
+
+| Key | Action |
+|-----|--------|
+| `w` | Enter write (send) mode |
+| `x` | Toggle ASCII / Hex display |
+| `Space` | Pause / resume incoming data |
+| `c` | Clear log |
+| `Esc` | Open disconnect dialog |
+| `q` / `Ctrl+C` | Quit |
+
+### Serial Monitor — write mode
+
+| Key | Action |
+|-----|--------|
+| _type_ | Enter message (text in ASCII mode, hex pairs in Hex mode) |
+| `Enter` | Send |
+| `Backspace` | Delete last character |
+| `Esc` | Cancel |
+
 ## Configuration
 
 Settings are saved automatically to `~/.pulse-tui.toml` on connect:
@@ -164,14 +206,21 @@ host = "localhost"
 port = 502
 unit_id = 1
 poll_interval_ms = 1000
+
+[serial]
+port = "/dev/ttyUSB0"   # e.g. COM3 on Windows
+baud_rate = 115200
+data_bits = 8           # 5 / 6 / 7 / 8
+parity = "None"         # None / Odd / Even
+stop_bits = 1           # 1 / 2
 ```
 
 ## Roadmap
 
 - [x] MQTT publish from TUI
 - [x] Modbus TCP source
-- [ ] Serial source
-- [ ] `pulse mqtt` / `pulse modbus` subcommand model
+- [x] Serial source
+- [ ] `pulse mqtt` / `pulse modbus` / `pulse serial` subcommand model
 
 ## Tech Stack
 
@@ -182,6 +231,7 @@ poll_interval_ms = 1000
 | [tokio](https://tokio.rs) | Async runtime |
 | [rumqttc](https://github.com/bytebeamio/rumqtt) | MQTT client |
 | [tokio-modbus](https://github.com/slowtec/tokio-modbus) | Modbus TCP client |
+| [serialport](https://github.com/serialport/serialport-rs) | Serial port I/O |
 | [serde](https://serde.rs) + [toml](https://github.com/toml-rs/toml) | Config serialization |
 | [arboard](https://github.com/1Password/arboard) | Clipboard access |
 | [tracing](https://github.com/tokio-rs/tracing) | Logging |

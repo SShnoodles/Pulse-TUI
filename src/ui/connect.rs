@@ -333,9 +333,9 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
     );
 
     let options = [
-        ("  S  ", "Serial"),
-        ("  M  ", "MQTT"),
         ("  B  ", "Modbus TCP"),
+        ("  M  ", "MQTT"),
+        ("  S  ", "Serial"),
     ];
     for (i, (key_label, name)) in options.iter().enumerate() {
         let is_sel = selected == i;
@@ -367,11 +367,11 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         Paragraph::new(Line::from(vec![
             Span::styled("↑↓", Style::new().fg(Color::Cyan)),
             Span::styled(" / ", Style::new().fg(Color::DarkGray)),
-            Span::styled("S", Style::new().fg(Color::Cyan)),
+            Span::styled("B", Style::new().fg(Color::Cyan)),
             Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("M", Style::new().fg(Color::Cyan)),
             Span::styled("/", Style::new().fg(Color::DarkGray)),
-            Span::styled("B", Style::new().fg(Color::Cyan)),
+            Span::styled("S", Style::new().fg(Color::Cyan)),
             Span::styled("  select   ", Style::new().fg(Color::DarkGray)),
             Span::styled("Enter", Style::new().fg(Color::Cyan)),
             Span::styled("  confirm   ", Style::new().fg(Color::DarkGray)),
