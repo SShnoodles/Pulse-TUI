@@ -113,7 +113,6 @@ pub struct AppState {
     pub selected_topic_idx: Option<usize>,
     pub topics: Vec<TopicItem>,
     pub messages: Vec<Message>,
-    pub logs: Vec<String>,
     /// None = auto-follow newest; Some(i) = cursor at index i in filtered list
     pub msg_cursor: Option<usize>,
     /// Yank (copy selection) mode — only active when paused
@@ -171,7 +170,6 @@ impl Default for AppState {
             selected_topic_idx: None,
             topics: Vec::new(),
             messages: Vec::new(),
-            logs: Vec::new(),
             msg_cursor: None,
             yank_mode: false,
             yank_start: 0,
@@ -197,17 +195,6 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub fn new(broker: impl Into<String>) -> Self {
-        Self {
-            broker: broker.into(),
-            ..Self::default()
-        }
-    }
-
-    pub fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
-    }
-
     pub fn enter_search(&mut self) {
         self.search_mode = true;
     }

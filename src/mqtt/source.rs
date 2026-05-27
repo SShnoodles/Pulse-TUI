@@ -4,7 +4,7 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::mpsc;
 
 use super::config::MqttConfig;
-use crate::core::{AppEvent, MqttMessage, MqttVersion, Source};
+use crate::core::{AppEvent, MqttMessage, MqttVersion};
 use crate::events::EventTx;
 
 pub enum MqttCommand {
@@ -187,9 +187,4 @@ impl MqttSource {
             }
         }
     }
-}
-
-impl Source for MqttSource {
-    async fn connect(&mut self) {}
-    async fn poll(&mut self) {}
 }

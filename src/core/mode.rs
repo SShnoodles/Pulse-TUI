@@ -235,8 +235,6 @@ impl SerialForm {
         self.active = self.active.checked_sub(1).unwrap_or(Self::FIELD_COUNT - 1);
     }
 
-    pub fn push(&mut self, _c: char) {}
-    pub fn backspace(&mut self) {}
     pub fn paste(&mut self, _s: &str) {}
 
     pub fn left(&mut self) {

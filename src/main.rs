@@ -84,7 +84,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
     form.mqtt_version = saved.mqtt_version();
 
     // Initial topics from saved config
-    let mut initial_topics: Vec<String> = saved.mqtt.topics.clone();
+    let initial_topics: Vec<String> = saved.mqtt.topics.clone();
     let mut mode = AppMode::SourceSelect;
     let mut source_select_idx: usize = 0;
     let mut state = AppState::default();

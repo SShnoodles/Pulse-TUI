@@ -366,7 +366,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("↑↓", Style::new().fg(Color::Cyan)),
-            Span::styled(" / ", Style::new().fg(Color::DarkGray)),
+            Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("B", Style::new().fg(Color::Cyan)),
             Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("M", Style::new().fg(Color::Cyan)),
