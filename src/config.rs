@@ -7,7 +7,7 @@ use crate::core::MqttVersion;
 // ── Per-source config sections ──────────────────────────────────────────────
 
 /// Persisted settings for the MQTT source  →  [mqtt] in ~/.pulse-tui.toml
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MqttConfig {
     pub host: String,
@@ -32,8 +32,29 @@ impl Default for MqttConfig {
 
 // Future sources: WebSocketConfig, SerialConfig …
 
-/// Persisted settings for the Modbus TCP source  →  [modbus] in ~/.pulse-tui.toml
-#[derive(Debug, Serialize, Deserialize)]
+/// Persisted settings for the Serial source  →  [serial] in ~/.pulse-tui.toml
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SerialPersistedConfig {
+    pub port: String,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub parity: String,
+    pub stop_bits: u8,
+}
+
+impl Default for SerialPersistedConfig {
+    fn default() -> Self {
+        Self {
+            port: String::new(),
+            baud_rate: 115200,
+            data_bits: 8,
+            parity: "None".into(),
+            stop_bits: 1,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModbusPersistedConfig {
     pub host: String,
@@ -60,6 +81,7 @@ impl Default for ModbusPersistedConfig {
 pub struct SavedConfig {
     pub mqtt: MqttConfig,
     pub modbus: ModbusPersistedConfig,
+    pub serial: SerialPersistedConfig,
 }
 
 impl SavedConfig {

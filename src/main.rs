@@ -3,6 +3,7 @@ mod core;
 mod events;
 mod modbus;
 mod mqtt;
+mod serial;
 mod ui;
 
 use std::{io::stdout, time::Duration};
@@ -20,12 +21,17 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     core::{
-        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow, SourceKind,
+        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow,
+        SerialDisplayFormat, SerialEntry, SerialForm, SourceKind,
     },
     events::{new_event_channel, EventTx},
     modbus::{ModbusCommand, ModbusConfig, ModbusSource},
     mqtt::{MqttCommand, MqttConfig, MqttSource},
-    ui::{draw, draw_connect, draw_modbus_connect, draw_modbus_monitor, draw_source_select, Panel},
+    serial::{SerialCommand, SerialConfig, SerialSource},
+    ui::{
+        draw, draw_connect, draw_modbus_connect, draw_modbus_monitor, draw_serial_connect,
+        draw_serial_monitor, draw_source_select, Panel,
+    },
 };
 
 fn random_hex_suffix() -> String {
@@ -85,11 +91,29 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
     let mut active_panel = Panel::default();
     let mut mqtt_cmd: Option<UnboundedSender<MqttCommand>> = None;
     let mut modbus_cmd: Option<UnboundedSender<ModbusCommand>> = None;
+    let mut serial_cmd: Option<UnboundedSender<SerialCommand>> = None;
     let mut modbus_form = ModbusForm::new();
     modbus_form.values[0] = saved.modbus.host.clone();
     modbus_form.values[1] = saved.modbus.port.to_string();
     modbus_form.values[2] = saved.modbus.unit_id.to_string();
     modbus_form.values[3] = saved.modbus.poll_interval_ms.to_string();
+
+    let mut serial_form = SerialForm::new();
+    if !saved.serial.port.is_empty() {
+        serial_form.select_port(&saved.serial.port);
+    }
+    serial_form.baud_idx = [
+        1200u32, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
+    ]
+    .iter()
+    .position(|&b| b == saved.serial.baud_rate)
+    .unwrap_or(7);
+    serial_form.parity_idx = match saved.serial.parity.as_str() {
+        "Odd" => 1,
+        "Even" => 2,
+        _ => 0,
+    };
+    serial_form.stop_idx = if saved.serial.stop_bits == 2 { 1 } else { 0 };
 
     // Tick task
     let tick_tx = tx.clone();
@@ -134,9 +158,14 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
             AppMode::ModbusConnect | AppMode::ModbusConnecting => {
                 terminal.draw(|f| draw_modbus_connect(f, &modbus_form))?;
             }
+            AppMode::SerialConnect | AppMode::SerialConnecting => {
+                terminal.draw(|f| draw_serial_connect(f, &serial_form))?;
+            }
             AppMode::Monitor => {
                 if state.source_kind == SourceKind::ModbusTcp {
                     terminal.draw(|f| draw_modbus_monitor(f, &state))?;
+                } else if state.source_kind == SourceKind::Serial {
+                    terminal.draw(|f| draw_serial_monitor(f, &state))?;
                 } else {
                     terminal.draw(|f| draw(f, &state, active_panel))?;
                 }
@@ -176,6 +205,18 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             .collect();
                     }
                 }
+                AppEvent::SerialLine(line) => {
+                    if mode == AppMode::Monitor
+                        && state.source_kind == SourceKind::Serial
+                        && !state.serial_paused
+                    {
+                        state.serial_lines.push(SerialEntry::rx(line));
+                        if state.serial_lines.len() > 2000 {
+                            state.serial_lines.remove(0);
+                        }
+                        state.serial_line_offset = state.serial_lines.len().saturating_sub(1);
+                    }
+                }
                 AppEvent::Connected => {
                     state.connected = true;
                     state.last_error = None;
@@ -187,6 +228,10 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         AppMode::ModbusConnecting => {
                             mode = AppMode::Monitor;
                             modbus_form.status = ConnectStatus::Idle;
+                        }
+                        AppMode::SerialConnecting => {
+                            mode = AppMode::Monitor;
+                            serial_form.status = ConnectStatus::Idle;
                         }
                         _ => {}
                     }
@@ -202,12 +247,20 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             modbus_cmd = None;
                             mode = AppMode::ModbusConnect;
                         }
+                        AppMode::SerialConnecting => {
+                            mode = AppMode::SerialConnect;
+                            serial_form.status = ConnectStatus::Idle;
+                        }
+                        AppMode::Monitor if state.source_kind == SourceKind::Serial => {
+                            state.connected = false;
+                        }
                         _ => {}
                     }
                 }
                 AppEvent::Error(e) => match mode {
                     AppMode::Connecting => form.status = ConnectStatus::Error(e),
                     AppMode::ModbusConnecting => modbus_form.status = ConnectStatus::Error(e),
+                    AppMode::SerialConnecting => serial_form.status = ConnectStatus::Error(e),
                     _ => state.last_error = Some(e),
                 },
 
@@ -216,6 +269,10 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         form.paste(&s);
                     } else if mode == AppMode::ModbusConnect {
                         modbus_form.paste(&s);
+                    } else if mode == AppMode::SerialConnect {
+                        serial_form.paste(&s);
+                    } else if state.serial_write_mode {
+                        state.serial_write_input.push_str(&s);
                     } else if state.publish_mode {
                         state.publish_input.push_str(&s);
                     } else if state.subscribe_mode {
@@ -230,24 +287,26 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
                         | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
                         (KeyModifiers::NONE, KeyCode::Up) => {
-                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(1);
+                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(2);
                         }
                         (KeyModifiers::NONE, KeyCode::Down) => {
-                            source_select_idx = (source_select_idx + 1) % 2;
+                            source_select_idx = (source_select_idx + 1) % 3;
                         }
-                        (KeyModifiers::NONE, KeyCode::Enter) => {
-                            if source_select_idx == 0 {
-                                mode = AppMode::Connect;
-                            } else {
-                                mode = AppMode::ModbusConnect;
-                            }
+                        (KeyModifiers::NONE, KeyCode::Enter) => match source_select_idx {
+                            0 => mode = AppMode::SerialConnect,
+                            1 => mode = AppMode::Connect,
+                            _ => mode = AppMode::ModbusConnect,
+                        },
+                        (KeyModifiers::NONE, KeyCode::Char('s'))
+                        | (KeyModifiers::NONE, KeyCode::Char('1')) => {
+                            mode = AppMode::SerialConnect;
                         }
                         (KeyModifiers::NONE, KeyCode::Char('m'))
-                        | (KeyModifiers::NONE, KeyCode::Char('1')) => {
+                        | (KeyModifiers::NONE, KeyCode::Char('2')) => {
                             mode = AppMode::Connect;
                         }
                         (KeyModifiers::NONE, KeyCode::Char('b'))
-                        | (KeyModifiers::NONE, KeyCode::Char('2')) => {
+                        | (KeyModifiers::NONE, KeyCode::Char('3')) => {
                             mode = AppMode::ModbusConnect;
                         }
                         _ => {}
@@ -278,6 +337,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     unit_id: modbus_form.values[2].parse().unwrap_or(1),
                                     poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
                                 },
+                                serial: saved.serial.clone(),
                             });
                             state.mqtt_version = "Modbus TCP";
                             state.source_kind = SourceKind::ModbusTcp;
@@ -301,6 +361,61 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             modbus_cmd = None;
                             mode = AppMode::ModbusConnect;
                             modbus_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
+                    AppMode::SerialConnect => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
+                        | (KeyModifiers::NONE, KeyCode::Down) => serial_form.next(),
+                        (KeyModifiers::SHIFT, KeyCode::BackTab)
+                        | (KeyModifiers::NONE, KeyCode::Up) => serial_form.prev(),
+                        (KeyModifiers::NONE, KeyCode::Left) => serial_form.left(),
+                        (KeyModifiers::NONE, KeyCode::Right) => serial_form.right(),
+                        (KeyModifiers::NONE, KeyCode::Backspace) => {
+                            serial_form.status = ConnectStatus::Idle;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                            serial_form.refresh_ports();
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            let port = serial_form.port().to_string();
+                            if port.is_empty() {
+                                serial_form.status = ConnectStatus::Error(
+                                    "No ports detected — press r to refresh".into(),
+                                );
+                            } else {
+                                config::save(&config::SavedConfig {
+                                    mqtt: saved.mqtt.clone(),
+                                    modbus: saved.modbus.clone(),
+                                    serial: config::SerialPersistedConfig {
+                                        port: port.clone(),
+                                        baud_rate: serial_form.baud_rate(),
+                                        data_bits: serial_form.data_bits_val(),
+                                        parity: serial_form.parity_label().to_string(),
+                                        stop_bits: serial_form.stop_bits_val(),
+                                    },
+                                });
+                                state.source_kind = SourceKind::Serial;
+                                state.serial_lines.clear();
+                                state.serial_line_offset = 0;
+                                serial_form.status = ConnectStatus::Connecting;
+                                serial_cmd = Some(spawn_serial(&serial_form, &tx));
+                                mode = AppMode::SerialConnecting;
+                            }
+                        }
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            mode = AppMode::SourceSelect;
+                        }
+                        _ => {}
+                    },
+
+                    AppMode::SerialConnecting => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            mode = AppMode::SerialConnect;
+                            serial_form.status = ConnectStatus::Idle;
                         }
                         _ => {}
                     },
@@ -347,6 +462,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     unit_id: modbus_form.values[2].parse().unwrap_or(1),
                                     poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
                                 },
+                                serial: saved.serial.clone(),
                             });
                             state.subscribed_topics = initial_topics.clone();
                             state.auto_select_first = !initial_topics.is_empty();
@@ -374,6 +490,92 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         }
                         _ => {}
                     },
+
+                    // ── Serial monitor: write mode ───────────────────────────────────
+                    AppMode::Monitor
+                        if state.source_kind == SourceKind::Serial && state.serial_write_mode =>
+                    {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.serial_write_mode = false;
+                                state.serial_write_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Enter) => {
+                                let raw = state.serial_write_input.trim().to_string();
+                                if !raw.is_empty() {
+                                    let result = match state.serial_display_format {
+                                        SerialDisplayFormat::Ascii => {
+                                            let mut b = raw.as_bytes().to_vec();
+                                            b.push(b'\n');
+                                            Some((b.clone(), b[..b.len() - 1].to_vec()))
+                                        }
+                                        SerialDisplayFormat::Hex => match parse_hex_input(&raw) {
+                                            Some(b) => {
+                                                let mut send = b.clone();
+                                                send.push(b'\n');
+                                                Some((send, b))
+                                            }
+                                            None => {
+                                                state.last_error =
+                                                    Some(format!("Invalid hex input: {raw}"));
+                                                None
+                                            }
+                                        },
+                                    };
+                                    if let Some((bytes_to_send, echo_bytes)) = result {
+                                        if let Some(ref cmd_tx) = serial_cmd {
+                                            let _ = cmd_tx.send(SerialCommand::Send(bytes_to_send));
+                                        }
+                                        state.serial_lines.push(SerialEntry::tx(echo_bytes));
+                                        if state.serial_lines.len() > 2000 {
+                                            state.serial_lines.remove(0);
+                                        }
+                                        state.serial_line_offset =
+                                            state.serial_lines.len().saturating_sub(1);
+                                    }
+                                }
+                                state.serial_write_mode = false;
+                                state.serial_write_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                                state.serial_write_input.pop();
+                            }
+                            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                                state.serial_write_input.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // ── Serial monitor: normal navigation ───────────────────
+                    AppMode::Monitor if state.source_kind == SourceKind::Serial => {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c'))
+                            | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Char('w')) => {
+                                state.serial_write_mode = true;
+                                state.serial_write_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char(' ')) => {
+                                state.serial_paused = !state.serial_paused;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('x')) => {
+                                state.serial_display_format = match state.serial_display_format {
+                                    SerialDisplayFormat::Ascii => SerialDisplayFormat::Hex,
+                                    SerialDisplayFormat::Hex => SerialDisplayFormat::Ascii,
+                                };
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                                state.serial_lines.clear();
+                                state.serial_line_offset = 0;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.confirm_back = true;
+                            }
+                            _ => {}
+                        }
+                    }
 
                     // ── Modbus monitor: editing query form ────────────────
                     AppMode::Monitor
@@ -457,10 +659,12 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         | (KeyModifiers::NONE, KeyCode::Enter) => {
                             mqtt_cmd = None;
                             modbus_cmd = None;
+                            serial_cmd = None;
                             state = AppState::default();
                             mode = AppMode::SourceSelect;
                             form.status = ConnectStatus::Idle;
                             modbus_form.status = ConnectStatus::Idle;
+                            serial_form.status = ConnectStatus::Idle;
                         }
                         _ => {
                             state.confirm_back = false;
@@ -590,7 +794,6 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             Panel::Messages => state.select_msg_next(),
                         },
 
-                        (KeyModifiers::NONE, KeyCode::Char(' ')) => state.toggle_pause(),
                         (KeyModifiers::NONE, KeyCode::Char('/')) => state.enter_search(),
                         (KeyModifiers::NONE, KeyCode::Char('s'))
                             if state.source_kind == SourceKind::Mqtt =>
@@ -669,6 +872,50 @@ fn spawn_modbus(form: &ModbusForm, tx: &EventTx) -> UnboundedSender<ModbusComman
         poll_interval_ms: form.poll_ms(),
     };
     let (source, cmd_tx) = ModbusSource::new(config, tx.clone());
+    tokio::spawn(source.run());
+    cmd_tx
+}
+
+// Parse space-separated hex tokens ("41 42 43") into bytes. Returns None on any invalid token.
+fn parse_hex_input(s: &str) -> Option<Vec<u8>> {
+    // Strip spaces, then parse consecutive pairs of hex digits as bytes.
+    let digits: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if digits.len() % 2 != 0 {
+        return None;
+    }
+    digits
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect()
+}
+
+fn spawn_serial(form: &SerialForm, tx: &EventTx) -> UnboundedSender<SerialCommand> {
+    use serialport::{DataBits, Parity, StopBits};
+    let data_bits = match form.data_bits_val() {
+        5 => DataBits::Five,
+        6 => DataBits::Six,
+        7 => DataBits::Seven,
+        _ => DataBits::Eight,
+    };
+    let parity = match form.parity_label() {
+        "Odd" => Parity::Odd,
+        "Even" => Parity::Even,
+        _ => Parity::None,
+    };
+    let stop_bits = if form.stop_bits_val() == 2 {
+        StopBits::Two
+    } else {
+        StopBits::One
+    };
+    let config = SerialConfig {
+        port: form.port().to_string(),
+        baud_rate: form.baud_rate(),
+        data_bits,
+        parity,
+        stop_bits,
+    };
+    let (source, cmd_tx) = SerialSource::new(config, tx.clone());
     tokio::spawn(source.run());
     cmd_tx
 }

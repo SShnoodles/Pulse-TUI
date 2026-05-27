@@ -1,5 +1,61 @@
 use super::mode::{ModbusQueryForm, SourceKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SerialDisplayFormat {
+    #[default]
+    Ascii,
+    Hex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerialDirection {
+    Rx,
+    Tx,
+}
+
+#[derive(Debug, Clone)]
+pub struct SerialEntry {
+    pub timestamp: String, // "hh:mm:ss"
+    pub direction: SerialDirection,
+    pub raw: Vec<u8>, // raw bytes (never converted through UTF-8)
+}
+
+impl SerialEntry {
+    fn now(direction: SerialDirection, raw: Vec<u8>) -> Self {
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        Self {
+            timestamp: ts,
+            direction,
+            raw,
+        }
+    }
+
+    pub fn rx(text: String) -> Self {
+        Self::now(SerialDirection::Rx, text.into_bytes())
+    }
+
+    pub fn tx(bytes: Vec<u8>) -> Self {
+        Self::now(SerialDirection::Tx, bytes)
+    }
+
+    /// Format for display. In Hex mode the payload bytes are hex-encoded.
+    pub fn render(&self, fmt: SerialDisplayFormat) -> String {
+        let payload = match fmt {
+            SerialDisplayFormat::Ascii => String::from_utf8_lossy(&self.raw).into_owned(),
+            SerialDisplayFormat::Hex => self
+                .raw
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        };
+        match self.direction {
+            SerialDirection::Rx => format!("{} RX <- {}", self.timestamp, payload),
+            SerialDirection::Tx => format!("{} TX -> {}", self.timestamp, payload),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ModbusRow {
     pub address: u16,
@@ -86,6 +142,18 @@ pub struct AppState {
     pub modbus_query: ModbusQueryForm,
     /// Scroll offset for the Modbus data table
     pub modbus_table_offset: usize,
+    /// Lines received from / sent to the serial port (capped at 2000)
+    pub serial_lines: Vec<SerialEntry>,
+    /// Scroll offset for the serial monitor view
+    pub serial_line_offset: usize,
+    /// Write (send) mode active in serial monitor
+    pub serial_write_mode: bool,
+    /// Input buffer for serial write mode
+    pub serial_write_input: String,
+    /// Display format for received serial data
+    pub serial_display_format: SerialDisplayFormat,
+    /// Pause auto-scroll in serial monitor (new lines still buffered)
+    pub serial_paused: bool,
 }
 
 impl Default for AppState {
@@ -118,6 +186,12 @@ impl Default for AppState {
             modbus_rows: Vec::new(),
             modbus_query: ModbusQueryForm::default(),
             modbus_table_offset: 0,
+            serial_lines: Vec::<SerialEntry>::new(),
+            serial_line_offset: 0,
+            serial_write_mode: false,
+            serial_write_input: String::new(),
+            serial_display_format: SerialDisplayFormat::Ascii,
+            serial_paused: false,
         }
     }
 }

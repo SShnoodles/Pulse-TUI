@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::core::{ConnectForm, ConnectStatus, ModbusForm};
+use crate::core::{ConnectForm, ConnectStatus, ModbusForm, SerialForm};
 
 pub fn draw_connect(frame: &mut Frame, form: &ConnectForm) {
     let modal = centered_rect(56, 21, frame.area());
@@ -164,6 +164,58 @@ fn draw_field(frame: &mut Frame, area: Rect, label: &str, value: &str, active: b
     );
 }
 
+/// Generic ◀ value ▶ selector widget (3-row high area).
+fn draw_selector(frame: &mut Frame, area: Rect, label: &str, value: &str, active: bool) {
+    let label_style = if active {
+        Style::new().fg(Color::Cyan)
+    } else {
+        Style::new().fg(Color::Gray)
+    };
+    let border_style = if active {
+        Style::new().fg(Color::Cyan)
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    let arrow_style = if active {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    let value_style = if active {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::White)
+    };
+
+    let cols = Layout::horizontal([Constraint::Length(11), Constraint::Min(0)]).split(area);
+    let label_rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(cols[0]);
+
+    frame.render_widget(
+        Paragraph::new(Span::styled(format!("   {label}"), label_style)),
+        label_rows[1],
+    );
+
+    let line = Line::from(vec![
+        Span::styled("◀ ", arrow_style),
+        Span::styled(value.to_owned(), value_style),
+        Span::styled(" ▶", arrow_style),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(border_style),
+        ),
+        cols[1],
+    );
+}
+
 fn draw_version(frame: &mut Frame, area: Rect, form: &ConnectForm, is_editing: bool) {
     let active = form.active == 4 && is_editing;
     let label_style = if active {
@@ -258,6 +310,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         Constraint::Length(1), // spacer
         Constraint::Length(1), // option 1
         Constraint::Length(1), // option 2
+        Constraint::Length(1), // option 3
         Constraint::Min(0),    // spacer
         Constraint::Length(1), // hint
     ])
@@ -279,7 +332,11 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         chunks[0],
     );
 
-    let options = [("  M  ", "MQTT"), ("  B  ", "Modbus TCP")];
+    let options = [
+        ("  S  ", "Serial"),
+        ("  M  ", "MQTT"),
+        ("  B  ", "Modbus TCP"),
+    ];
     for (i, (key_label, name)) in options.iter().enumerate() {
         let is_sel = selected == i;
         let (key_style, name_style) = if is_sel {
@@ -310,6 +367,8 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         Paragraph::new(Line::from(vec![
             Span::styled("↑↓", Style::new().fg(Color::Cyan)),
             Span::styled(" / ", Style::new().fg(Color::DarkGray)),
+            Span::styled("S", Style::new().fg(Color::Cyan)),
+            Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("M", Style::new().fg(Color::Cyan)),
             Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("B", Style::new().fg(Color::Cyan)),
@@ -319,7 +378,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
             Span::styled("q", Style::new().fg(Color::Cyan)),
             Span::styled("  quit", Style::new().fg(Color::DarkGray)),
         ])),
-        chunks[5],
+        chunks[6],
     );
 }
 
@@ -409,6 +468,139 @@ pub fn draw_modbus_connect(frame: &mut Frame, form: &ModbusForm) {
             y: modal.y + 3,
             width: modal.width.saturating_sub(2),
             height: 12,
+        };
+        frame.render_widget(
+            Block::new().style(Style::new().fg(Color::DarkGray)),
+            overlay,
+        );
+    }
+}
+
+// ── Serial connect form ───────────────────────────────────────────────────────────
+
+pub fn draw_serial_connect(frame: &mut Frame, form: &SerialForm) {
+    let modal = centered_rect(56, 19, frame.area());
+    frame.render_widget(
+        Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Cyan)),
+        modal,
+    );
+    let inner = Rect {
+        x: modal.x + 2,
+        y: modal.y + 1,
+        width: modal.width.saturating_sub(4),
+        height: modal.height.saturating_sub(2),
+    };
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // title
+        Constraint::Length(3), // port
+        Constraint::Length(3), // baud rate
+        Constraint::Length(3), // data bits
+        Constraint::Length(3), // parity
+        Constraint::Length(3), // stop bits
+        Constraint::Min(0),    // spacer
+        Constraint::Length(2), // hint / status
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "● PULSE TUI",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            Line::from(Span::styled(
+                "Serial Connection",
+                Style::new().fg(Color::DarkGray),
+            ))
+            .alignment(Alignment::Center),
+        ]),
+        chunks[0],
+    );
+
+    let is_editing = matches!(form.status, ConnectStatus::Idle | ConnectStatus::Error(_));
+
+    // Port — selector from detected ports
+    let port_label = if form.available_ports.is_empty() {
+        "(no ports found)".to_string()
+    } else {
+        form.port().to_string()
+    };
+    draw_selector(
+        frame,
+        chunks[1],
+        "Port",
+        &port_label,
+        form.active == 0 && is_editing,
+    );
+
+    // Selector fields
+    draw_selector(
+        frame,
+        chunks[2],
+        "Baud Rate",
+        &form.baud_label(),
+        form.active == 1 && is_editing,
+    );
+    draw_selector(
+        frame,
+        chunks[3],
+        "Data Bits",
+        &form.data_label(),
+        form.active == 2 && is_editing,
+    );
+    draw_selector(
+        frame,
+        chunks[4],
+        "Parity",
+        form.parity_label(),
+        form.active == 3 && is_editing,
+    );
+    draw_selector(
+        frame,
+        chunks[5],
+        "Stop Bits",
+        &form.stop_label(),
+        form.active == 4 && is_editing,
+    );
+
+    let status_line = match &form.status {
+        ConnectStatus::Connecting => Line::from(vec![
+            Span::styled("⠇ ", Style::new().fg(Color::Yellow)),
+            Span::styled("Connecting…  ", Style::new().fg(Color::Yellow)),
+            Span::styled("Esc ", Style::new().fg(Color::Cyan)),
+            Span::styled("cancel", Style::new().fg(Color::DarkGray)),
+        ]),
+        ConnectStatus::Error(e) => Line::from(vec![
+            Span::styled("✗ ", Style::new().fg(Color::Red)),
+            Span::styled(e.clone(), Style::new().fg(Color::Red)),
+        ]),
+        ConnectStatus::Idle => Line::from(vec![
+            Span::styled("Tab", Style::new().fg(Color::Cyan)),
+            Span::styled("/", Style::new().fg(Color::DarkGray)),
+            Span::styled("↑↓", Style::new().fg(Color::Cyan)),
+            Span::styled(" nav   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("←/→", Style::new().fg(Color::Cyan)),
+            Span::styled(" change   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("r", Style::new().fg(Color::Cyan)),
+            Span::styled(" refresh ports   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::new().fg(Color::Cyan)),
+            Span::styled(" connect   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::new().fg(Color::Cyan)),
+            Span::styled(" back", Style::new().fg(Color::DarkGray)),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(vec![status_line]), chunks[7]);
+
+    if matches!(form.status, ConnectStatus::Connecting) {
+        let overlay = Rect {
+            x: modal.x + 1,
+            y: modal.y + 3,
+            width: modal.width.saturating_sub(2),
+            height: 14,
         };
         frame.render_widget(
             Block::new().style(Style::new().fg(Color::DarkGray)),
