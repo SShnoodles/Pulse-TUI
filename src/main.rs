@@ -802,6 +802,11 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             drop(serial_cmd.take());
                             break 'main;
                         }
+                        (KeyModifiers::NONE, KeyCode::Char(' '))
+                            if state.source_kind == SourceKind::Mqtt =>
+                        {
+                            state.paused = !state.paused;
+                        }
 
                         (KeyModifiers::NONE, KeyCode::Esc) => {
                             if state.selected_topic_idx.is_some() {

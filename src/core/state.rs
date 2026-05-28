@@ -1,5 +1,7 @@
 use super::mode::{ModbusQueryForm, SourceKind};
 
+const TPS_HISTORY_LEN: usize = 60;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SerialDisplayFormat {
     #[default]
@@ -68,6 +70,7 @@ pub struct TopicItem {
     pub msg_count: u64,
     pub tps: u64,         // messages/sec (updated each second)
     pub tps_counter: u64, // accumulator for current second
+    pub tps_history: Vec<u64>,
 }
 
 impl TopicItem {
@@ -77,6 +80,7 @@ impl TopicItem {
             msg_count: 0,
             tps: 0,
             tps_counter: 0,
+            tps_history: Vec::new(),
         }
     }
 }
@@ -361,6 +365,10 @@ impl AppState {
             for t in &mut self.topics {
                 t.tps = t.tps_counter;
                 t.tps_counter = 0;
+                t.tps_history.push(t.tps);
+                if t.tps_history.len() > TPS_HISTORY_LEN {
+                    t.tps_history.remove(0);
+                }
             }
         }
     }

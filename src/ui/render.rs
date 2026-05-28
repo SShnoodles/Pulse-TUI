@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Sparkline, Wrap},
     Frame,
 };
 
@@ -322,6 +322,14 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &AppState, focus: Panel) {
 }
 
 fn draw_topics(frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
+    let show_sparkline = area.height >= 8;
+    let chunks = if show_sparkline {
+        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area)
+    } else {
+        Layout::vertical([Constraint::Min(0)]).split(area)
+    };
+
+    let list_area = chunks[0];
     let block = Block::new()
         .title(Span::styled(
             format!(" Topics ({}) ", state.topics.len()),
@@ -367,7 +375,49 @@ fn draw_topics(frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
         Span::raw("")
     };
 
-    frame.render_widget(List::new(items).block(block.title_bottom(hint)), area);
+    frame.render_widget(List::new(items).block(block.title_bottom(hint)), list_area);
+
+    if show_sparkline {
+        let spark_area = chunks[1];
+        let (title, points): (String, Vec<u64>) = state
+            .selected_topic_idx
+            .and_then(|i| state.topics.get(i))
+            .map(|t| {
+                (
+                    format!(" TPS — {} ", t.name),
+                    if t.tps_history.is_empty() {
+                        vec![0]
+                    } else {
+                        t.tps_history.clone()
+                    },
+                )
+            })
+            .unwrap_or_else(|| (" TPS — select a topic ".to_string(), vec![0]));
+
+        let (min_tps, max_tps, cur_tps) = points
+            .iter()
+            .copied()
+            .fold((u64::MAX, 0u64, 0u64), |(min_v, max_v, _), v| {
+                (min_v.min(v), max_v.max(v), v)
+            });
+        let min_tps = if min_tps == u64::MAX { 0 } else { min_tps };
+        let legend = format!(" min {min_tps}  max {max_tps}  now {cur_tps} ");
+
+        frame.render_widget(
+            Sparkline::default()
+                .block(
+                    Block::new()
+                        .title(Span::styled(title, Style::new().fg(Color::Yellow)))
+                        .title_bottom(Span::styled(legend, Style::new().fg(Color::DarkGray)))
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::new().fg(Color::DarkGray)),
+                )
+                .data(&points)
+                .style(Style::new().fg(Color::Yellow)),
+            spark_area,
+        );
+    }
 }
 
 fn wrap_line(line: &str, width: usize) -> Vec<String> {
