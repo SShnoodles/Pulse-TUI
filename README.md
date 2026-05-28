@@ -220,7 +220,6 @@ stop_bits = 1           # 1 / 2
 - [x] MQTT publish from TUI
 - [x] Modbus TCP source
 - [x] Serial source
-- [ ] `pulse mqtt` / `pulse modbus` / `pulse serial` subcommand model
 
 ## Tech Stack
 

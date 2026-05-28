@@ -129,21 +129,28 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
 
     // Keyboard / paste task
     let key_tx = tx.clone();
-    tokio::spawn(async move {
-        loop {
-            match tokio::task::spawn_blocking(event::read).await {
-                Ok(Ok(Event::Key(k))) if k.kind != KeyEventKind::Release => {
+    tokio::task::spawn_blocking(move || loop {
+        if key_tx.is_closed() {
+            break;
+        }
+
+        match event::poll(Duration::from_millis(50)) {
+            Ok(true) => match event::read() {
+                Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => {
                     if key_tx.send(AppEvent::Key(k)).is_err() {
                         break;
                     }
                 }
-                Ok(Ok(Event::Paste(s))) => {
+                Ok(Event::Paste(s)) => {
                     if key_tx.send(AppEvent::Paste(s)).is_err() {
                         break;
                     }
                 }
-                _ => {}
-            }
+                Ok(_) => {}
+                Err(_) => break,
+            },
+            Ok(false) => {}
+            Err(_) => break,
         }
     });
 
@@ -551,8 +558,13 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                     // ── Serial monitor: normal navigation ───────────────────
                     AppMode::Monitor if state.source_kind == SourceKind::Serial => {
                         match (key.modifiers, key.code) {
-                            (KeyModifiers::CONTROL, KeyCode::Char('c'))
-                            | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Char('q')) => {
+                                drop(mqtt_cmd.take());
+                                drop(modbus_cmd.take());
+                                drop(serial_cmd.take());
+                                break 'main;
+                            }
                             (KeyModifiers::NONE, KeyCode::Char('w')) => {
                                 state.serial_write_mode = true;
                                 state.serial_write_input.clear();
@@ -628,8 +640,13 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                     // ── Modbus monitor: normal navigation ─────────────────────
                     AppMode::Monitor if state.source_kind == SourceKind::ModbusTcp => {
                         match (key.modifiers, key.code) {
-                            (KeyModifiers::CONTROL, KeyCode::Char('c'))
-                            | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Char('q')) => {
+                                drop(mqtt_cmd.take());
+                                drop(modbus_cmd.take());
+                                drop(serial_cmd.take());
+                                break 'main;
+                            }
                             (KeyModifiers::NONE, KeyCode::Char('e')) => {
                                 state.modbus_query.editing = true;
                             }
@@ -655,6 +672,12 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
 
                     AppMode::Monitor if state.confirm_back => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Char('q')) => {
+                            drop(mqtt_cmd.take());
+                            drop(modbus_cmd.take());
+                            drop(serial_cmd.take());
+                            break 'main;
+                        }
                         (KeyModifiers::NONE, KeyCode::Char('y'))
                         | (KeyModifiers::NONE, KeyCode::Enter) => {
                             mqtt_cmd = None;
@@ -772,8 +795,13 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                     },
 
                     AppMode::Monitor => match (key.modifiers, key.code) {
-                        (KeyModifiers::CONTROL, KeyCode::Char('c'))
-                        | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Char('q')) => {
+                            drop(mqtt_cmd.take());
+                            drop(modbus_cmd.take());
+                            drop(serial_cmd.take());
+                            break 'main;
+                        }
 
                         (KeyModifiers::NONE, KeyCode::Esc) => {
                             if state.selected_topic_idx.is_some() {
