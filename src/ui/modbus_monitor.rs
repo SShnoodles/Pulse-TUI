@@ -1,8 +1,12 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table},
+    widgets::{
+        Axis, Block, BorderType, Borders, Cell, Chart, Clear, Dataset, GraphType, Paragraph, Row,
+        Table,
+    },
     Frame,
 };
 
@@ -69,8 +73,14 @@ fn draw_modbus_body(frame: &mut Frame, area: Rect, state: &AppState) {
         .constraints([Constraint::Length(34), Constraint::Min(0)])
         .split(area);
 
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(10)])
+        .split(chunks[1]);
+
     draw_query_panel(frame, chunks[0], state);
-    draw_data_table(frame, chunks[1], state);
+    draw_data_table(frame, right[0], state);
+    draw_trend_chart(frame, right[1], state);
 }
 
 // ── Query panel ───────────────────────────────────────────────────────────────
@@ -228,6 +238,116 @@ fn draw_data_table(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(table, area);
 }
 
+fn draw_trend_chart(frame: &mut Frame, area: Rect, state: &AppState) {
+    let selected = state.selected_modbus_trend_point();
+    let title = if let Some(p) = selected {
+        format!(" Point Trend - addr {} ", p.address)
+    } else {
+        " Point Trend - no point ".to_string()
+    };
+
+    let data: Vec<(f64, f64)> = selected
+        .map(|p| {
+            p.values
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (i as f64, v.value))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let x_labels: Vec<Span<'static>> = selected
+        .map(|p| {
+            if p.values.is_empty() {
+                return vec![Span::styled("--:--", Style::default().fg(Color::White))];
+            }
+
+            // Keep labels readable: roughly one mm:ss label per 8 columns.
+            let max_labels = ((area.width.saturating_sub(4)) / 8).clamp(2, 7) as usize;
+            let sample_count = p.values.len();
+            let label_count = sample_count.min(max_labels).max(1);
+
+            if label_count == 1 {
+                return vec![Span::styled(
+                    p.values
+                        .last()
+                        .map(|s| s.time_mmss.clone())
+                        .unwrap_or_else(|| "--:--".to_string()),
+                    Style::default().fg(Color::White),
+                )];
+            }
+
+            (0..label_count)
+                .map(|i| {
+                    let idx = i * (sample_count - 1) / (label_count - 1);
+                    let text = p
+                        .values
+                        .get(idx)
+                        .map(|s| s.time_mmss.clone())
+                        .unwrap_or_else(|| "--:--".to_string());
+                    Span::styled(text, Style::default().fg(Color::White))
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| vec![Span::styled("--:--", Style::default().fg(Color::White))]);
+
+    let points_count = data.len();
+    let x_max = (points_count.max(2) - 1) as f64;
+    let (mut y_min, mut y_max) = data
+        .iter()
+        .fold((0.0f64, 1.0f64), |(min_v, max_v), (_, y)| {
+            (min_v.min(*y), max_v.max(*y))
+        });
+    if (y_max - y_min).abs() < f64::EPSILON {
+        y_min -= 1.0;
+        y_max += 1.0;
+    }
+    let y_mid = (y_min + y_max) / 2.0;
+
+    let point_info = if let Some(p) = selected {
+        let current = p.values.last().map(|s| s.value).unwrap_or(0.0);
+        format!(" now {:.4} ", current)
+    } else {
+        " add with a ".to_string()
+    };
+
+    let chart = Chart::new(vec![Dataset::default()
+        .name("value")
+        .graph_type(GraphType::Line)
+        .marker(symbols::Marker::Braille)
+        .style(Style::default().fg(Color::Yellow))
+        .data(&data)])
+    .block(
+        Block::default()
+            .title(Span::styled(title, Style::default().fg(Color::Yellow)))
+            .title_bottom(Span::styled(
+                point_info,
+                Style::default().fg(Color::DarkGray),
+            ))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    )
+    .x_axis(
+        Axis::default()
+            .style(Style::default().fg(Color::White))
+            .labels(x_labels)
+            .bounds([0.0, x_max]),
+    )
+    .y_axis(
+        Axis::default()
+            .style(Style::default().fg(Color::White))
+            .labels(vec![
+                Span::styled(format!("{y_min:.2}"), Style::default().fg(Color::White)),
+                Span::styled(format!("{y_mid:.2}"), Style::default().fg(Color::White)),
+                Span::styled(format!("{y_max:.2}"), Style::default().fg(Color::White)),
+            ])
+            .bounds([y_min, y_max]),
+    );
+
+    frame.render_widget(chart, area);
+}
+
 // ── Display value formatter ───────────────────────────────────────────────────
 
 fn format_display(
@@ -320,7 +440,27 @@ fn format_display(
 fn draw_modbus_hints(frame: &mut Frame, area: Rect, state: &AppState) {
     let q = &state.modbus_query;
 
-    let line = if q.editing {
+    let line = if state.modbus_add_point_mode {
+        Line::from(vec![
+            Span::styled(
+                " ADD POINT ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  address: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                state.modbus_add_point_input.clone(),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled("_", Style::default().fg(Color::White)),
+            Span::styled("  Enter ", Style::default().fg(Color::Cyan)),
+            Span::styled("add   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc ", Style::default().fg(Color::Cyan)),
+            Span::styled("cancel", Style::default().fg(Color::DarkGray)),
+        ])
+    } else if q.editing {
         if q.active == 0 || q.active == 3 {
             Line::from(vec![
                 Span::styled(
@@ -364,6 +504,8 @@ fn draw_modbus_hints(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(vec![
             Span::styled("  e ", Style::default().fg(Color::Cyan)),
             Span::styled("edit query   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("a ", Style::default().fg(Color::Cyan)),
+            Span::styled("add point   ", Style::default().fg(Color::DarkGray)),
             Span::styled("↑↓ ", Style::default().fg(Color::Cyan)),
             Span::styled("scroll   ", Style::default().fg(Color::DarkGray)),
             Span::styled("c ", Style::default().fg(Color::Cyan)),

@@ -210,6 +210,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                 value: v,
                             })
                             .collect();
+                        state.update_modbus_trend_points();
                     }
                 }
                 AppEvent::SerialLine(line) => {
@@ -637,6 +638,36 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         }
                     }
 
+                    // ── Modbus monitor: add trend point mode ───────────────────
+                    AppMode::Monitor
+                        if state.source_kind == SourceKind::ModbusTcp
+                            && state.modbus_add_point_mode =>
+                    {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.modbus_add_point_mode = false;
+                                state.modbus_add_point_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Enter) => {
+                                if let Ok(addr) = state.modbus_add_point_input.parse::<u16>() {
+                                    state.add_modbus_trend_point(addr);
+                                }
+                                state.modbus_add_point_mode = false;
+                                state.modbus_add_point_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                                state.modbus_add_point_input.pop();
+                            }
+                            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c))
+                                if c.is_ascii_digit() =>
+                            {
+                                state.modbus_add_point_input.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // ── Modbus monitor: normal navigation ─────────────────────
                     AppMode::Monitor if state.source_kind == SourceKind::ModbusTcp => {
                         match (key.modifiers, key.code) {
@@ -649,6 +680,10 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             }
                             (KeyModifiers::NONE, KeyCode::Char('e')) => {
                                 state.modbus_query.editing = true;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('a')) => {
+                                state.modbus_add_point_mode = true;
+                                state.modbus_add_point_input.clear();
                             }
                             (KeyModifiers::NONE, KeyCode::Up) => {
                                 state.modbus_table_offset =

@@ -318,8 +318,8 @@ impl SerialForm {
 pub enum FunctionCode {
     FC01Coil,
     FC02Discrete,
-    #[default]
     FC03Holding,
+    #[default]
     FC04Input,
 }
 
@@ -419,7 +419,7 @@ pub struct ModbusQueryForm {
 impl Default for ModbusQueryForm {
     fn default() -> Self {
         Self {
-            fc_idx: 2, // FC03 Holding
+            fc_idx: 3, // FC04 Input
             start_input: "0".into(),
             qty_input: "10".into(),
             format_idx: 0, // Unsigned

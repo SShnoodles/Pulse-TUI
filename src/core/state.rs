@@ -1,6 +1,7 @@
-use super::mode::{ModbusQueryForm, SourceKind};
+use super::mode::{DisplayFormat, FunctionCode, ModbusQueryForm, SourceKind};
 
 const TPS_HISTORY_LEN: usize = 60;
+const MODBUS_TREND_HISTORY_LEN: usize = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SerialDisplayFormat {
@@ -62,6 +63,27 @@ impl SerialEntry {
 pub struct ModbusRow {
     pub address: u16,
     pub value: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModbusTrendPoint {
+    pub address: u16,
+    pub values: Vec<ModbusTrendSample>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModbusTrendSample {
+    pub time_mmss: String,
+    pub value: f64,
+}
+
+impl ModbusTrendPoint {
+    pub fn new(address: u16) -> Self {
+        Self {
+            address,
+            values: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +167,14 @@ pub struct AppState {
     pub modbus_query: ModbusQueryForm,
     /// Scroll offset for the Modbus data table
     pub modbus_table_offset: usize,
+    /// Tracked Modbus points rendered in the trend chart
+    pub modbus_trend_points: Vec<ModbusTrendPoint>,
+    /// Selected tracked point index
+    pub modbus_trend_selected: usize,
+    /// Add-point input mode for the trend chart
+    pub modbus_add_point_mode: bool,
+    /// Address input buffer for add-point mode
+    pub modbus_add_point_input: String,
     /// Lines received from / sent to the serial port (capped at 2000)
     pub serial_lines: Vec<SerialEntry>,
     /// Scroll offset for the serial monitor view
@@ -188,6 +218,10 @@ impl Default for AppState {
             modbus_rows: Vec::new(),
             modbus_query: ModbusQueryForm::default(),
             modbus_table_offset: 0,
+            modbus_trend_points: Vec::new(),
+            modbus_trend_selected: 0,
+            modbus_add_point_mode: false,
+            modbus_add_point_input: String::new(),
             serial_lines: Vec::<SerialEntry>::new(),
             serial_line_offset: 0,
             serial_write_mode: false,
@@ -413,6 +447,46 @@ impl AppState {
         });
     }
 
+    pub fn add_modbus_trend_point(&mut self, address: u16) {
+        if let Some(i) = self
+            .modbus_trend_points
+            .iter()
+            .position(|p| p.address == address)
+        {
+            self.modbus_trend_selected = i;
+            return;
+        }
+
+        self.modbus_trend_points
+            .push(ModbusTrendPoint::new(address));
+        self.modbus_trend_selected = self.modbus_trend_points.len().saturating_sub(1);
+    }
+
+    pub fn selected_modbus_trend_point(&self) -> Option<&ModbusTrendPoint> {
+        self.modbus_trend_points.get(self.modbus_trend_selected)
+    }
+
+    pub fn update_modbus_trend_points(&mut self) {
+        let fmt = self.modbus_query.format();
+        let fc = self.modbus_query.fc();
+
+        for p in &mut self.modbus_trend_points {
+            if let Some(v) = numeric_display_for_address(&self.modbus_rows, p.address, fmt, fc) {
+                p.values.push(ModbusTrendSample {
+                    time_mmss: chrono::Local::now().format("%M:%S").to_string(),
+                    value: v,
+                });
+                if p.values.len() > MODBUS_TREND_HISTORY_LEN {
+                    p.values.remove(0);
+                }
+            }
+        }
+
+        if self.modbus_trend_selected >= self.modbus_trend_points.len() {
+            self.modbus_trend_selected = self.modbus_trend_points.len().saturating_sub(1);
+        }
+    }
+
     /// Delete the currently selected topic: remove from topics list, subscribed list, messages.
     /// Returns the topic name for the caller to send Unsubscribe.
     pub fn delete_selected_topic(&mut self) -> Option<String> {
@@ -435,4 +509,84 @@ impl AppState {
 fn now_hms() -> String {
     let now = chrono::Local::now();
     now.format("%H:%M:%S").to_string()
+}
+
+fn numeric_display_for_address(
+    rows: &[ModbusRow],
+    address: u16,
+    fmt: DisplayFormat,
+    fc: FunctionCode,
+) -> Option<f64> {
+    let idx = rows.iter().position(|r| r.address == address)?;
+
+    if fc.is_bit() {
+        return Some(if rows[idx].value != 0 { 1.0 } else { 0.0 });
+    }
+
+    let reg_count = fmt.register_count();
+    if reg_count > 1 && idx % reg_count != 0 {
+        return None;
+    }
+
+    match fmt {
+        DisplayFormat::Unsigned => Some(rows[idx].value as f64),
+        DisplayFormat::Signed => Some((rows[idx].value as i16) as f64),
+        DisplayFormat::Hex | DisplayFormat::Binary => Some(rows[idx].value as f64),
+        DisplayFormat::Long => {
+            if idx + 1 < rows.len() {
+                let hi = rows[idx].value as u32;
+                let lo = rows[idx + 1].value as u32;
+                Some(((hi << 16 | lo) as i32) as f64)
+            } else {
+                None
+            }
+        }
+        DisplayFormat::LongInverse => {
+            if idx + 1 < rows.len() {
+                let lo = rows[idx].value as u32;
+                let hi = rows[idx + 1].value as u32;
+                Some(((hi << 16 | lo) as i32) as f64)
+            } else {
+                None
+            }
+        }
+        DisplayFormat::Float => {
+            if idx + 1 < rows.len() {
+                let bytes = u32::from(rows[idx].value) << 16 | u32::from(rows[idx + 1].value);
+                Some(f32::from_bits(bytes) as f64)
+            } else {
+                None
+            }
+        }
+        DisplayFormat::FloatInverse => {
+            if idx + 1 < rows.len() {
+                let bytes = u32::from(rows[idx + 1].value) << 16 | u32::from(rows[idx].value);
+                Some(f32::from_bits(bytes) as f64)
+            } else {
+                None
+            }
+        }
+        DisplayFormat::Double => {
+            if idx + 3 < rows.len() {
+                let b: u64 = (u64::from(rows[idx].value) << 48)
+                    | (u64::from(rows[idx + 1].value) << 32)
+                    | (u64::from(rows[idx + 2].value) << 16)
+                    | u64::from(rows[idx + 3].value);
+                Some(f64::from_bits(b))
+            } else {
+                None
+            }
+        }
+        DisplayFormat::DoubleInverse => {
+            if idx + 3 < rows.len() {
+                let b: u64 = (u64::from(rows[idx + 3].value) << 48)
+                    | (u64::from(rows[idx + 2].value) << 32)
+                    | (u64::from(rows[idx + 1].value) << 16)
+                    | u64::from(rows[idx].value);
+                Some(f64::from_bits(b))
+            } else {
+                None
+            }
+        }
+    }
 }
