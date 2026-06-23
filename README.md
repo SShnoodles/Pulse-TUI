@@ -3,7 +3,7 @@
 ![GitHub release](https://img.shields.io/github/v/release/sshnoodles/Pulse-TUI)
 ![Downloads](https://img.shields.io/github/downloads/sshnoodles/Pulse-TUI/total)
 
-A real-time terminal monitor (TUI) built in Rust. Supports MQTT, Modbus TCP, and Serial port monitoring.
+A real-time terminal monitor (TUI) built in Rust. Supports MQTT, Modbus TCP, OPC UA, and serial-port monitoring.
 
 ![tui](assets/tui.png)
 
@@ -29,6 +29,13 @@ A real-time terminal monitor (TUI) built in Rust. Supports MQTT, Modbus TCP, and
 - Multiple display formats: Unsigned, Signed, Hex, Binary, Long, Long Inverse, Float, Float Inverse, Double, Double Inverse
 - Auto-reconnect on disconnect
 
+### OPC UA
+- Connect to OPC UA servers using an `opc.tcp://` endpoint
+- Poll one or more NodeIds at a configurable interval
+- View each node's display name, value, data type, and source/server timestamps
+- Add and remove monitored NodeIds without reconnecting
+- Anonymous access or username/password authentication
+
 ### Serial
 - Connect to any serial port with configurable baud rate, data bits, parity, and stop bits
 - Timestamped RX / TX log (`hh:mm:ss RX <-` / `hh:mm:ss TX ->`)
@@ -40,7 +47,7 @@ A real-time terminal monitor (TUI) built in Rust. Supports MQTT, Modbus TCP, and
 - Log capped at 2000 entries
 
 ### General
-- Protocol selector on launch (MQTT / Modbus TCP / Serial)
+- Protocol selector on launch (MQTT / Modbus TCP / OPC UA / Serial)
 - Config persisted to `~/.pulse-tui.toml` (all connection settings restored on next launch)
 
 ## Install
@@ -63,6 +70,17 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/SShnoodles/Pulse-T
 brew install sshnoodles/tap/pulse
 ```
 
+### Build from source
+
+Rust 1.75 or later is required. On Linux, the `serialport` dependency may also
+need your distribution's `libudev` development package.
+
+```sh
+git clone https://github.com/SShnoodles/Pulse-TUI.git
+cd Pulse-TUI
+cargo install --path .
+```
+
 ## Usage
 
 Just run `pulse` — no arguments needed. All settings are restored from `~/.pulse-tui.toml` on launch.
@@ -81,9 +99,11 @@ pulse
 | `Enter` | Confirm |
 | `M` | Go to MQTT connect form |
 | `B` | Go to Modbus TCP connect form |
+| `O` | Go to OPC UA connect form |
+| `S` | Go to Serial connect form |
 | `q` / `Ctrl+C` | Quit |
 
-### Connect form (MQTT & Modbus TCP)
+### Connect form (MQTT, Modbus TCP, and OPC UA)
 
 | Key | Action |
 |-----|--------|
@@ -93,6 +113,9 @@ pulse
 | `Enter` | Connect |
 | `Esc` | Back to protocol select |
 | `Ctrl+C` | Quit |
+
+For MQTT, `←` / `→` / `Space` changes the protocol version when the Version
+field is selected. The other forms have only text fields.
 
 ### MQTT Monitor — normal mode
 
@@ -134,6 +157,26 @@ pulse
 | `y` | Copy selected text to clipboard |
 | `↑` / `↓` | Move to adjacent message |
 | `Esc` | Exit yank mode |
+
+### OPC UA Monitor — normal mode
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select a node |
+| `a` | Add a NodeId |
+| `d` | Delete the selected NodeId |
+| `Esc` | Open disconnect dialog |
+| `q` / `Ctrl+C` | Quit |
+
+### OPC UA Monitor — add or delete NodeId mode
+
+| Key | Action |
+|-----|--------|
+| _type_ | Enter or edit the NodeId |
+| `↑` / `↓` | Select a NodeId when deleting |
+| `Enter` | Add or delete the NodeId |
+| `Backspace` | Delete the last character |
+| `Esc` | Cancel |
 
 ### Modbus TCP Monitor — normal mode
 
@@ -207,6 +250,12 @@ port = 502
 unit_id = 1
 poll_interval_ms = 1000
 
+[opcua]
+endpoint_url = "opc.tcp://localhost:4840"
+node_ids = ["ns=2;s=Demo.Static.Scalar.Int32"]
+poll_interval_ms = 1000
+username = ""
+
 [serial]
 port = "/dev/ttyUSB0"   # e.g. COM3 on Windows
 baud_rate = 115200
@@ -215,10 +264,14 @@ parity = "None"         # None / Odd / Even
 stop_bits = 1           # 1 / 2
 ```
 
+Passwords are used only for the current connection and are not written to the
+configuration file.
+
 ## Roadmap
 
 - [x] MQTT publish from TUI
 - [x] Modbus TCP source
+- [x] OPC UA source
 - [x] Serial source
 
 ## Tech Stack
@@ -231,6 +284,7 @@ stop_bits = 1           # 1 / 2
 | [rumqttc](https://github.com/bytebeamio/rumqtt) | MQTT client |
 | [tokio-modbus](https://github.com/slowtec/tokio-modbus) | Modbus TCP client |
 | [serialport](https://github.com/serialport/serialport-rs) | Serial port I/O |
+| [async-opcua](https://github.com/locka99/opcua) | OPC UA client |
 | [serde](https://serde.rs) + [toml](https://github.com/toml-rs/toml) | Config serialization |
 | [arboard](https://github.com/1Password/arboard) | Clipboard access |
 | [tracing](https://github.com/tokio-rs/tracing) | Logging |
