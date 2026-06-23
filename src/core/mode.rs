@@ -6,6 +6,8 @@ pub enum AppMode {
     Connecting,
     ModbusConnect,
     ModbusConnecting,
+    OpcUaConnect,
+    OpcUaConnecting,
     SerialConnect,
     SerialConnecting,
     Monitor,
@@ -114,7 +116,74 @@ pub enum SourceKind {
     #[default]
     Mqtt,
     ModbusTcp,
+    OpcUa,
     Serial,
+}
+
+// ── OpcUaForm ───────────────────────────────────────────────────────────────
+
+/// State for the OPC UA connection form.
+#[derive(Debug)]
+pub struct OpcUaForm {
+    pub values: [String; 4], // [endpoint_url, poll_ms, username, password]
+    pub active: usize,
+    pub status: ConnectStatus,
+}
+
+impl OpcUaForm {
+    pub const LABELS: [&'static str; 4] = ["Endpoint", "Poll ms", "Username", "Password"];
+    const FIELD_COUNT: usize = 4;
+
+    pub fn new() -> Self {
+        Self {
+            values: [
+                "opc.tcp://localhost:4840".into(),
+                "1000".into(),
+                String::new(),
+                String::new(),
+            ],
+            active: 0,
+            status: ConnectStatus::Idle,
+        }
+    }
+
+    pub fn next(&mut self) {
+        self.active = (self.active + 1) % Self::FIELD_COUNT;
+    }
+
+    pub fn prev(&mut self) {
+        self.active = self.active
+            .checked_sub(1)
+            .unwrap_or(Self::FIELD_COUNT - 1);
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.values[self.active].push(c);
+    }
+
+    pub fn backspace(&mut self) {
+        self.values[self.active].pop();
+    }
+
+    pub fn paste(&mut self, s: &str) {
+        self.values[self.active].push_str(s);
+    }
+
+    pub fn endpoint_url(&self) -> &str {
+        &self.values[0]
+    }
+
+    pub fn poll_ms(&self) -> u64 {
+        self.values[1].parse().unwrap_or(1000)
+    }
+
+    pub fn username(&self) -> &str {
+        &self.values[2]
+    }
+
+    pub fn password(&self) -> &str {
+        &self.values[3]
+    }
 }
 
 // ── ModbusForm ───────────────────────────────────────────────────────────────

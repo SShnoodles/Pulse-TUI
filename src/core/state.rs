@@ -1,3 +1,5 @@
+use chrono::{DateTime, Local};
+
 use super::mode::{DisplayFormat, FunctionCode, ModbusQueryForm, SourceKind};
 
 const TPS_HISTORY_LEN: usize = 60;
@@ -75,6 +77,16 @@ pub struct ModbusTrendPoint {
 pub struct ModbusTrendSample {
     pub time_mmss: String,
     pub value: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpcUaRow {
+    pub node_id: String,
+    pub display_name: String,
+    pub value: String,
+    pub data_type: String,
+    pub source_timestamp: String,
+    pub server_timestamp: String,
 }
 
 impl ModbusTrendPoint {
@@ -187,6 +199,22 @@ pub struct AppState {
     pub serial_display_format: SerialDisplayFormat,
     /// Pause auto-scroll in serial monitor (new lines still buffered)
     pub serial_paused: bool,
+    /// Latest values for monitored OPC UA nodes.
+    pub opcua_rows: Vec<OpcUaRow>,
+    /// Node IDs being monitored by OPC UA source.
+    pub opcua_node_ids: Vec<String>,
+    /// Scroll offset for OPC UA monitor
+    pub opcua_offset: usize,
+    /// Add-node input mode for OPC UA monitor.
+    pub opcua_add_node_mode: bool,
+    /// Input buffer for add-node mode.
+    pub opcua_add_node_input: String,
+    /// Delete-node input mode for OPC UA monitor.
+    pub opcua_delete_node_mode: bool,
+    /// Input buffer for delete-node mode.
+    pub opcua_delete_node_input: String,
+    /// Local timestamp of the last successful OPC UA poll.
+    pub opcua_last_refresh: Option<DateTime<Local>>,
 }
 
 impl Default for AppState {
@@ -228,6 +256,14 @@ impl Default for AppState {
             serial_write_input: String::new(),
             serial_display_format: SerialDisplayFormat::Ascii,
             serial_paused: false,
+            opcua_rows: Vec::new(),
+            opcua_node_ids: Vec::new(),
+            opcua_offset: 0,
+            opcua_add_node_mode: false,
+            opcua_add_node_input: String::new(),
+            opcua_delete_node_mode: false,
+            opcua_delete_node_input: String::new(),
+            opcua_last_refresh: None,
         }
     }
 }

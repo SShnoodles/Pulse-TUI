@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::core::{ConnectForm, ConnectStatus, ModbusForm, SerialForm};
+use crate::core::{ConnectForm, ConnectStatus, ModbusForm, OpcUaForm, SerialForm};
 
 pub fn draw_connect(frame: &mut Frame, form: &ConnectForm) {
     let modal = centered_rect(56, 21, frame.area());
@@ -291,7 +291,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 // ── Source select screen ──────────────────────────────────────────────────────────
 
 pub fn draw_source_select(frame: &mut Frame, selected: usize) {
-    let modal = centered_rect(48, 13, frame.area());
+    let modal = centered_rect(52, 14, frame.area());
     frame.render_widget(
         Block::new()
             .borders(Borders::ALL)
@@ -311,6 +311,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         Constraint::Length(1), // option 1
         Constraint::Length(1), // option 2
         Constraint::Length(1), // option 3
+        Constraint::Length(1), // option 4
         Constraint::Min(0),    // spacer
         Constraint::Length(1), // hint
     ])
@@ -335,6 +336,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
     let options = [
         ("  B  ", "Modbus TCP"),
         ("  M  ", "MQTT"),
+        ("  O  ", "OPC UA"),
         ("  S  ", "Serial"),
     ];
     for (i, (key_label, name)) in options.iter().enumerate() {
@@ -371,6 +373,8 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
             Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("M", Style::new().fg(Color::Cyan)),
             Span::styled("/", Style::new().fg(Color::DarkGray)),
+            Span::styled("O", Style::new().fg(Color::Cyan)),
+            Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("S", Style::new().fg(Color::Cyan)),
             Span::styled("  select   ", Style::new().fg(Color::DarkGray)),
             Span::styled("Enter", Style::new().fg(Color::Cyan)),
@@ -378,7 +382,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
             Span::styled("q", Style::new().fg(Color::Cyan)),
             Span::styled("  quit", Style::new().fg(Color::DarkGray)),
         ])),
-        chunks[6],
+        chunks[7],
     );
 }
 
@@ -601,6 +605,101 @@ pub fn draw_serial_connect(frame: &mut Frame, form: &SerialForm) {
             y: modal.y + 3,
             width: modal.width.saturating_sub(2),
             height: 14,
+        };
+        frame.render_widget(
+            Block::new().style(Style::new().fg(Color::DarkGray)),
+            overlay,
+        );
+    }
+}
+
+// ── OPC UA connect form ───────────────────────────────────────────────────────
+
+pub fn draw_opcua_connect(frame: &mut Frame, form: &OpcUaForm) {
+    let modal = centered_rect(64, 22, frame.area());
+    frame.render_widget(
+        Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Cyan)),
+        modal,
+    );
+    let inner = Rect {
+        x: modal.x + 2,
+        y: modal.y + 1,
+        width: modal.width.saturating_sub(4),
+        height: modal.height.saturating_sub(2),
+    };
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // title
+        Constraint::Length(3), // endpoint url
+        Constraint::Length(3), // poll ms
+        Constraint::Length(3), // username
+        Constraint::Length(3), // password
+        Constraint::Min(0),    // spacer
+        Constraint::Length(2), // hint / status
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "● PULSE TUI",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            Line::from(Span::styled(
+                "OPC UA Connection",
+                Style::new().fg(Color::DarkGray),
+            ))
+            .alignment(Alignment::Center),
+        ]),
+        chunks[0],
+    );
+
+    let is_editing = matches!(form.status, ConnectStatus::Idle | ConnectStatus::Error(_));
+
+    for (i, chunk) in chunks[1..=4].iter().enumerate() {
+        draw_field(
+            frame,
+            *chunk,
+            OpcUaForm::LABELS[i],
+            &form.values[i],
+            i == form.active && is_editing,
+            i == 3, // field index 3 = password → masked
+        );
+    }
+
+    let status_line = match &form.status {
+        ConnectStatus::Connecting => Line::from(vec![
+            Span::styled("⠇ ", Style::new().fg(Color::Yellow)),
+            Span::styled("Connecting…  ", Style::new().fg(Color::Yellow)),
+            Span::styled("Esc ", Style::new().fg(Color::Cyan)),
+            Span::styled("cancel", Style::new().fg(Color::DarkGray)),
+        ]),
+        ConnectStatus::Error(e) => Line::from(vec![
+            Span::styled("✗ ", Style::new().fg(Color::Red)),
+            Span::styled(e.clone(), Style::new().fg(Color::Red)),
+        ]),
+        ConnectStatus::Idle => Line::from(vec![
+            Span::styled("Tab", Style::new().fg(Color::Cyan)),
+            Span::styled("/", Style::new().fg(Color::DarkGray)),
+            Span::styled("↑↓", Style::new().fg(Color::Cyan)),
+            Span::styled(" navigate   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::new().fg(Color::Cyan)),
+            Span::styled(" connect   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::new().fg(Color::Cyan)),
+            Span::styled(" back", Style::new().fg(Color::DarkGray)),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(vec![status_line]), chunks[6]);
+
+    if matches!(form.status, ConnectStatus::Connecting) {
+        let overlay = Rect {
+            x: modal.x + 1,
+            y: modal.y + 3,
+            width: modal.width.saturating_sub(2),
+            height: modal.height.saturating_sub(4),
         };
         frame.render_widget(
             Block::new().style(Style::new().fg(Color::DarkGray)),

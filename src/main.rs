@@ -3,6 +3,7 @@ mod core;
 mod events;
 mod modbus;
 mod mqtt;
+mod opcua;
 mod serial;
 mod ui;
 
@@ -21,16 +22,17 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     core::{
-        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow,
+        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow, OpcUaForm,
         SerialDisplayFormat, SerialEntry, SerialForm, SourceKind,
     },
     events::{new_event_channel, EventTx},
     modbus::{ModbusCommand, ModbusConfig, ModbusSource},
     mqtt::{MqttCommand, MqttConfig, MqttSource},
+    opcua::{OpcUaCommand, OpcUaConfig, OpcUaSource},
     serial::{SerialCommand, SerialConfig, SerialSource},
     ui::{
-        draw, draw_connect, draw_modbus_connect, draw_modbus_monitor, draw_serial_connect,
-        draw_serial_monitor, draw_source_select, Panel,
+        draw, draw_connect, draw_modbus_connect, draw_modbus_monitor, draw_opcua_connect,
+        draw_opcua_monitor, draw_serial_connect, draw_serial_monitor, draw_source_select, Panel,
     },
 };
 
@@ -45,10 +47,6 @@ fn random_hex_suffix() -> String {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .init();
-
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(
@@ -91,6 +89,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
     let mut active_panel = Panel::default();
     let mut mqtt_cmd: Option<UnboundedSender<MqttCommand>> = None;
     let mut modbus_cmd: Option<UnboundedSender<ModbusCommand>> = None;
+    let mut opcua_cmd: Option<UnboundedSender<OpcUaCommand>> = None;
     let mut serial_cmd: Option<UnboundedSender<SerialCommand>> = None;
     let mut modbus_form = ModbusForm::new();
     modbus_form.values[0] = saved.modbus.host.clone();
@@ -114,6 +113,19 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
         _ => 0,
     };
     serial_form.stop_idx = if saved.serial.stop_bits == 2 { 1 } else { 0 };
+
+    let mut opcua_form = OpcUaForm::new();
+    opcua_form.values[0] = saved.opcua.endpoint_url.clone();
+    opcua_form.values[1] = saved.opcua.poll_interval_ms.to_string();
+    opcua_form.values[2] = saved.opcua.username.clone();
+    // password is not persisted; leave values[3] empty
+    state.opcua_node_ids = if !saved.opcua.node_ids.is_empty() {
+        saved.opcua.node_ids.clone()
+    } else if !saved.opcua.node_id.is_empty() {
+        vec![saved.opcua.node_id.clone()]
+    } else {
+        vec![]
+    };
 
     // Tick task
     let tick_tx = tx.clone();
@@ -168,9 +180,14 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
             AppMode::SerialConnect | AppMode::SerialConnecting => {
                 terminal.draw(|f| draw_serial_connect(f, &serial_form))?;
             }
+            AppMode::OpcUaConnect | AppMode::OpcUaConnecting => {
+                terminal.draw(|f| draw_opcua_connect(f, &opcua_form))?;
+            }
             AppMode::Monitor => {
                 if state.source_kind == SourceKind::ModbusTcp {
                     terminal.draw(|f| draw_modbus_monitor(f, &state))?;
+                } else if state.source_kind == SourceKind::OpcUa {
+                    terminal.draw(|f| draw_opcua_monitor(f, &state))?;
                 } else if state.source_kind == SourceKind::Serial {
                     terminal.draw(|f| draw_serial_monitor(f, &state))?;
                 } else {
@@ -179,13 +196,18 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
             }
         }
 
-        // Wait for at least one event, then drain all pending ones before next redraw.
-        // This prevents high-frequency MQTT messages from delaying key events.
+        // Wait for at least one event, then drain up to a bounded number pending
+        // events before next redraw. This keeps rendering responsive under
+        // high-frequency streams.
         let Some(first) = rx.recv().await else {
             break 'main;
         };
         let mut batch = vec![first];
-        while let Ok(e) = rx.try_recv() {
+        const MAX_EVENTS_PER_FRAME: usize = 256;
+        while batch.len() < MAX_EVENTS_PER_FRAME {
+            let Ok(e) = rx.try_recv() else {
+                break;
+            };
             batch.push(e);
         }
 
@@ -213,6 +235,38 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         state.update_modbus_trend_points();
                     }
                 }
+                AppEvent::OpcUaData {
+                    node_id,
+                    display_name,
+                    value,
+                    data_type,
+                    source_timestamp,
+                    server_timestamp,
+                } => {
+                    if mode == AppMode::Monitor && state.source_kind == SourceKind::OpcUa {
+                        if let Some(row) = state
+                            .opcua_rows
+                            .iter_mut()
+                            .find(|row| row.node_id == node_id)
+                        {
+                            row.display_name = display_name;
+                            row.value = value;
+                            row.data_type = data_type;
+                            row.source_timestamp = source_timestamp;
+                            row.server_timestamp = server_timestamp;
+                        } else {
+                            state.opcua_rows.push(crate::core::OpcUaRow {
+                                node_id,
+                                display_name,
+                                value,
+                                data_type,
+                                source_timestamp,
+                                server_timestamp,
+                            });
+                        }
+                        state.opcua_last_refresh = Some(chrono::Local::now());
+                    }
+                }
                 AppEvent::SerialLine(line) => {
                     if mode == AppMode::Monitor
                         && state.source_kind == SourceKind::Serial
@@ -237,6 +291,10 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             mode = AppMode::Monitor;
                             modbus_form.status = ConnectStatus::Idle;
                         }
+                        AppMode::OpcUaConnecting => {
+                            mode = AppMode::Monitor;
+                            opcua_form.status = ConnectStatus::Idle;
+                        }
                         AppMode::SerialConnecting => {
                             mode = AppMode::Monitor;
                             serial_form.status = ConnectStatus::Idle;
@@ -255,9 +313,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             modbus_cmd = None;
                             mode = AppMode::ModbusConnect;
                         }
+                        AppMode::OpcUaConnecting => {
+                            opcua_cmd = None;
+                            mode = AppMode::OpcUaConnect;
+                        }
                         AppMode::SerialConnecting => {
                             mode = AppMode::SerialConnect;
                             serial_form.status = ConnectStatus::Idle;
+                        }
+                        AppMode::Monitor if state.source_kind == SourceKind::OpcUa => {
+                            state.connected = false;
                         }
                         AppMode::Monitor if state.source_kind == SourceKind::Serial => {
                             state.connected = false;
@@ -268,6 +333,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                 AppEvent::Error(e) => match mode {
                     AppMode::Connecting => form.status = ConnectStatus::Error(e),
                     AppMode::ModbusConnecting => modbus_form.status = ConnectStatus::Error(e),
+                    AppMode::OpcUaConnecting => opcua_form.status = ConnectStatus::Error(e),
                     AppMode::SerialConnecting => serial_form.status = ConnectStatus::Error(e),
                     _ => state.last_error = Some(e),
                 },
@@ -277,8 +343,14 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         form.paste(&s);
                     } else if mode == AppMode::ModbusConnect {
                         modbus_form.paste(&s);
+                    } else if mode == AppMode::OpcUaConnect {
+                        opcua_form.paste(&s);
                     } else if mode == AppMode::SerialConnect {
                         serial_form.paste(&s);
+                    } else if state.opcua_add_node_mode {
+                        state.opcua_add_node_input.push_str(&s);
+                    } else if state.opcua_delete_node_mode {
+                        state.opcua_delete_node_input.push_str(&s);
                     } else if state.serial_write_mode {
                         state.serial_write_input.push_str(&s);
                     } else if state.publish_mode {
@@ -295,14 +367,15 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
                         | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
                         (KeyModifiers::NONE, KeyCode::Up) => {
-                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(2);
+                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(3);
                         }
                         (KeyModifiers::NONE, KeyCode::Down) => {
-                            source_select_idx = (source_select_idx + 1) % 3;
+                            source_select_idx = (source_select_idx + 1) % 4;
                         }
                         (KeyModifiers::NONE, KeyCode::Enter) => match source_select_idx {
                             0 => mode = AppMode::ModbusConnect,
                             1 => mode = AppMode::Connect,
+                            2 => mode = AppMode::OpcUaConnect,
                             _ => mode = AppMode::SerialConnect,
                         },
                         (KeyModifiers::NONE, KeyCode::Char('s'))
@@ -313,8 +386,12 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         | (KeyModifiers::NONE, KeyCode::Char('2')) => {
                             mode = AppMode::Connect;
                         }
-                        (KeyModifiers::NONE, KeyCode::Char('b'))
+                        (KeyModifiers::NONE, KeyCode::Char('o'))
                         | (KeyModifiers::NONE, KeyCode::Char('3')) => {
+                            mode = AppMode::OpcUaConnect;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char('b'))
+                        | (KeyModifiers::NONE, KeyCode::Char('4')) => {
                             mode = AppMode::ModbusConnect;
                         }
                         _ => {}
@@ -345,6 +422,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     unit_id: modbus_form.values[2].parse().unwrap_or(1),
                                     poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
                                 },
+                                opcua: saved.opcua.clone(),
                                 serial: saved.serial.clone(),
                             });
                             state.mqtt_version = "Modbus TCP";
@@ -373,6 +451,61 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         _ => {}
                     },
 
+                    AppMode::OpcUaConnect => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
+                        | (KeyModifiers::NONE, KeyCode::Down) => opcua_form.next(),
+                        (KeyModifiers::SHIFT, KeyCode::BackTab)
+                        | (KeyModifiers::NONE, KeyCode::Up) => opcua_form.prev(),
+                        (KeyModifiers::NONE, KeyCode::Backspace) => {
+                            opcua_form.backspace();
+                            opcua_form.status = ConnectStatus::Idle;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            config::save(&config::SavedConfig {
+                                mqtt: saved.mqtt.clone(),
+                                modbus: saved.modbus.clone(),
+                                opcua: config::OpcUaPersistedConfig {
+                                    endpoint_url: opcua_form.values[0].clone(),
+                                    node_ids: state.opcua_node_ids.clone(),
+                                    node_id: String::new(),
+                                    poll_interval_ms: opcua_form.values[1].parse().unwrap_or(1000),
+                                    username: opcua_form.values[2].clone(),
+                                },
+                                serial: saved.serial.clone(),
+                            });
+                            state.broker = opcua_form.values[0].clone();
+                            state.source_kind = SourceKind::OpcUa;
+                            state.opcua_rows.clear();
+                            state.opcua_offset = 0;
+                            state.opcua_add_node_mode = false;
+                            state.opcua_add_node_input.clear();
+                            state.opcua_delete_node_mode = false;
+                            state.opcua_delete_node_input.clear();
+                            opcua_form.status = ConnectStatus::Connecting;
+                            opcua_cmd = Some(spawn_opcua(&opcua_form, &state.opcua_node_ids, &tx));
+                            mode = AppMode::OpcUaConnecting;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            mode = AppMode::SourceSelect;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char(c)) => {
+                            opcua_form.push(c);
+                            opcua_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
+                    AppMode::OpcUaConnecting => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            opcua_cmd = None;
+                            mode = AppMode::OpcUaConnect;
+                            opcua_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
                     AppMode::SerialConnect => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
                         (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
@@ -397,6 +530,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                 config::save(&config::SavedConfig {
                                     mqtt: saved.mqtt.clone(),
                                     modbus: saved.modbus.clone(),
+                                    opcua: saved.opcua.clone(),
                                     serial: config::SerialPersistedConfig {
                                         port: port.clone(),
                                         baud_rate: serial_form.baud_rate(),
@@ -470,6 +604,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     unit_id: modbus_form.values[2].parse().unwrap_or(1),
                                     poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
                                 },
+                                opcua: saved.opcua.clone(),
                                 serial: saved.serial.clone(),
                             });
                             state.subscribed_topics = initial_topics.clone();
@@ -563,6 +698,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             (KeyModifiers::NONE, KeyCode::Char('q')) => {
                                 drop(mqtt_cmd.take());
                                 drop(modbus_cmd.take());
+                                drop(opcua_cmd.take());
                                 drop(serial_cmd.take());
                                 break 'main;
                             }
@@ -675,6 +811,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             (KeyModifiers::NONE, KeyCode::Char('q')) => {
                                 drop(mqtt_cmd.take());
                                 drop(modbus_cmd.take());
+                                drop(opcua_cmd.take());
                                 drop(serial_cmd.take());
                                 break 'main;
                             }
@@ -710,6 +847,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         (KeyModifiers::NONE, KeyCode::Char('q')) => {
                             drop(mqtt_cmd.take());
                             drop(modbus_cmd.take());
+                            drop(opcua_cmd.take());
                             drop(serial_cmd.take());
                             break 'main;
                         }
@@ -717,17 +855,157 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         | (KeyModifiers::NONE, KeyCode::Enter) => {
                             mqtt_cmd = None;
                             modbus_cmd = None;
+                            opcua_cmd = None;
                             serial_cmd = None;
                             state = AppState::default();
                             mode = AppMode::SourceSelect;
                             form.status = ConnectStatus::Idle;
                             modbus_form.status = ConnectStatus::Idle;
+                            opcua_form.status = ConnectStatus::Idle;
                             serial_form.status = ConnectStatus::Idle;
                         }
                         _ => {
                             state.confirm_back = false;
                         }
                     },
+
+                    // ── OPC UA monitor: add NodeId mode ───────────────────
+                    AppMode::Monitor
+                        if state.source_kind == SourceKind::OpcUa && state.opcua_add_node_mode =>
+                    {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.opcua_add_node_mode = false;
+                                state.opcua_add_node_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Enter) => {
+                                let node_id = state.opcua_add_node_input.trim().to_string();
+                                if !node_id.is_empty() && !state.opcua_node_ids.contains(&node_id) {
+                                    state.opcua_node_ids.push(node_id.clone());
+                                    if let Some(ref cmd_tx) = opcua_cmd {
+                                        let _ = cmd_tx.send(OpcUaCommand::AddNode(node_id));
+                                    }
+                                    let mut cfg = config::load();
+                                    cfg.opcua.node_ids = state.opcua_node_ids.clone();
+                                    config::save(&cfg);
+                                }
+                                state.opcua_add_node_mode = false;
+                                state.opcua_add_node_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                                state.opcua_add_node_input.pop();
+                            }
+                            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                                state.opcua_add_node_input.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // ── OPC UA monitor: delete NodeId mode ────────────────
+                    AppMode::Monitor
+                        if state.source_kind == SourceKind::OpcUa
+                            && state.opcua_delete_node_mode =>
+                    {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Up) => {
+                                state.opcua_offset = state.opcua_offset.saturating_sub(1);
+                                if let Some(row) = state.opcua_rows.get(state.opcua_offset) {
+                                    state.opcua_delete_node_input = row.node_id.clone();
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Down) => {
+                                let max = state.opcua_rows.len().saturating_sub(1);
+                                if state.opcua_offset < max {
+                                    state.opcua_offset += 1;
+                                }
+                                if let Some(row) = state.opcua_rows.get(state.opcua_offset) {
+                                    state.opcua_delete_node_input = row.node_id.clone();
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.opcua_delete_node_mode = false;
+                                state.opcua_delete_node_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Enter) => {
+                                let node_id = state.opcua_delete_node_input.trim().to_string();
+                                if !node_id.is_empty() {
+                                    let before = state.opcua_node_ids.len();
+                                    state.opcua_node_ids.retain(|id| id != &node_id);
+                                    state.opcua_rows.retain(|row| row.node_id != node_id);
+                                    state.opcua_offset = state
+                                        .opcua_offset
+                                        .min(state.opcua_rows.len().saturating_sub(1));
+
+                                    if before != state.opcua_node_ids.len() {
+                                        if let Some(ref cmd_tx) = opcua_cmd {
+                                            let _ = cmd_tx.send(OpcUaCommand::RemoveNode(node_id));
+                                        }
+                                        let mut cfg = config::load();
+                                        cfg.opcua.node_ids = state.opcua_node_ids.clone();
+                                        config::save(&cfg);
+                                    } else {
+                                        state.last_error =
+                                            Some(format!("Node not found: {}", node_id));
+                                    }
+                                }
+
+                                state.opcua_delete_node_mode = false;
+                                state.opcua_delete_node_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                                state.opcua_delete_node_input.pop();
+                            }
+                            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                                state.opcua_delete_node_input.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // ── OPC UA monitor: normal navigation ──────────────────
+                    AppMode::Monitor if state.source_kind == SourceKind::OpcUa => {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Char('q')) => {
+                                drop(mqtt_cmd.take());
+                                drop(modbus_cmd.take());
+                                drop(opcua_cmd.take());
+                                drop(serial_cmd.take());
+                                break 'main;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Up) => {
+                                state.opcua_offset = state.opcua_offset.saturating_sub(1);
+                            }
+                            (KeyModifiers::NONE, KeyCode::Down) => {
+                                let max = state.opcua_rows.len().saturating_sub(1);
+                                if state.opcua_offset < max {
+                                    state.opcua_offset += 1;
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('a')) => {
+                                state.opcua_add_node_mode = true;
+                                state.opcua_add_node_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('d')) => {
+                                state.opcua_delete_node_mode = true;
+                                state.opcua_delete_node_input = state
+                                    .opcua_rows
+                                    .get(state.opcua_offset)
+                                    .map(|row| row.node_id.clone())
+                                    .or_else(|| {
+                                        state.opcua_rows.first().map(|row| row.node_id.clone())
+                                    })
+                                    .unwrap_or_default();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.confirm_back = true;
+                            }
+                            _ => {}
+                        }
+                    }
 
                     AppMode::Monitor if state.subscribe_mode => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
@@ -834,6 +1112,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         (KeyModifiers::NONE, KeyCode::Char('q')) => {
                             drop(mqtt_cmd.take());
                             drop(modbus_cmd.take());
+                            drop(opcua_cmd.take());
                             drop(serial_cmd.take());
                             break 'main;
                         }
@@ -984,6 +1263,23 @@ fn spawn_serial(form: &SerialForm, tx: &EventTx) -> UnboundedSender<SerialComman
         stop_bits,
     };
     let (source, cmd_tx) = SerialSource::new(config, tx.clone());
+    tokio::spawn(source.run());
+    cmd_tx
+}
+
+fn spawn_opcua(
+    form: &OpcUaForm,
+    node_ids: &[String],
+    tx: &EventTx,
+) -> UnboundedSender<OpcUaCommand> {
+    let config = OpcUaConfig {
+        endpoint_url: form.endpoint_url().to_string(),
+        node_ids: node_ids.to_vec(),
+        poll_interval_ms: form.poll_ms(),
+        username: form.username().to_string(),
+        password: form.password().to_string(),
+    };
+    let (source, cmd_tx) = OpcUaSource::new(config, tx.clone());
     tokio::spawn(source.run());
     cmd_tx
 }

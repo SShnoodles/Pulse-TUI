@@ -39,6 +39,9 @@ tokio-modbus = { version = "0.17", default-features = false, features = ["tcp"] 
 # Serial
 serialport = "4"
 
+# OPC UA
+async-opcua = { version = "0.18.0", features = ["client"] }
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

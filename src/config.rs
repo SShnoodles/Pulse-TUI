@@ -63,6 +63,32 @@ pub struct ModbusPersistedConfig {
     pub poll_interval_ms: u64,
 }
 
+/// Persisted settings for the OPC UA source  →  [opcua] in ~/.pulse-tui.toml
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpcUaPersistedConfig {
+    pub endpoint_url: String,
+    pub node_ids: Vec<String>,
+    /// Backward compatibility for old config files.
+    pub node_id: String,
+    pub poll_interval_ms: u64,
+    /// Username for UserName identity token (empty = Anonymous).
+    pub username: String,
+    // Password is intentionally not persisted.
+}
+
+impl Default for OpcUaPersistedConfig {
+    fn default() -> Self {
+        Self {
+            endpoint_url: "opc.tcp://localhost:4840".into(),
+            node_ids: vec![],
+            node_id: String::new(),
+            poll_interval_ms: 1000,
+            username: String::new(),
+        }
+    }
+}
+
 impl Default for ModbusPersistedConfig {
     fn default() -> Self {
         Self {
@@ -81,6 +107,7 @@ impl Default for ModbusPersistedConfig {
 pub struct SavedConfig {
     pub mqtt: MqttConfig,
     pub modbus: ModbusPersistedConfig,
+    pub opcua: OpcUaPersistedConfig,
     pub serial: SerialPersistedConfig,
 }
 
