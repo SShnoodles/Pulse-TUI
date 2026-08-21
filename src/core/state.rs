@@ -25,6 +25,39 @@ pub struct SerialEntry {
     pub raw: Vec<u8>, // raw bytes (never converted through UTF-8)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Iec104Direction {
+    Rx,
+    Tx,
+}
+
+#[derive(Debug, Clone)]
+pub struct Iec104Entry {
+    pub timestamp: String,
+    pub direction: Iec104Direction,
+    pub raw: Vec<u8>,
+    pub summary: String,
+}
+
+impl Iec104Entry {
+    pub fn new(direction: Iec104Direction, raw: Vec<u8>, summary: String) -> Self {
+        Self {
+            timestamp: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+            direction,
+            raw,
+            summary,
+        }
+    }
+
+    pub fn hex(&self) -> String {
+        self.raw
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 impl SerialEntry {
     fn now(direction: SerialDirection, raw: Vec<u8>) -> Self {
         let ts = chrono::Local::now().format("%H:%M:%S").to_string();
@@ -199,6 +232,13 @@ pub struct AppState {
     pub serial_display_format: SerialDisplayFormat,
     /// Pause auto-scroll in serial monitor (new lines still buffered)
     pub serial_paused: bool,
+    /// IEC104 APDU trace (capped at 2000 entries).
+    pub iec104_entries: Vec<Iec104Entry>,
+    /// Number of entries scrolled back from the newest visible page.
+    pub iec104_offset: usize,
+    pub iec104_paused: bool,
+    pub iec104_write_mode: bool,
+    pub iec104_write_input: String,
     /// Latest values for monitored OPC UA nodes.
     pub opcua_rows: Vec<OpcUaRow>,
     /// Node IDs being monitored by OPC UA source.
@@ -256,6 +296,11 @@ impl Default for AppState {
             serial_write_input: String::new(),
             serial_display_format: SerialDisplayFormat::Ascii,
             serial_paused: false,
+            iec104_entries: Vec::new(),
+            iec104_offset: 0,
+            iec104_paused: false,
+            iec104_write_mode: false,
+            iec104_write_input: String::new(),
             opcua_rows: Vec::new(),
             opcua_node_ids: Vec::new(),
             opcua_offset: 0,

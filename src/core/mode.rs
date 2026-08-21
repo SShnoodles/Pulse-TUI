@@ -8,6 +8,8 @@ pub enum AppMode {
     ModbusConnecting,
     OpcUaConnect,
     OpcUaConnecting,
+    Iec104Connect,
+    Iec104Connecting,
     SerialConnect,
     SerialConnecting,
     Monitor,
@@ -117,7 +119,91 @@ pub enum SourceKind {
     Mqtt,
     ModbusTcp,
     OpcUa,
+    Iec104,
     Serial,
+}
+
+// ── IEC104 form ─────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub struct Iec104Form {
+    pub values: [String; 4], // [host, port, common address, originator address]
+    pub active: usize,
+    pub status: ConnectStatus,
+}
+
+impl Iec104Form {
+    pub const LABELS: [&'static str; 4] = ["Host", "Port", "Common Addr", "Originator"];
+    const FIELD_COUNT: usize = 4;
+
+    pub fn new() -> Self {
+        Self {
+            values: ["localhost".into(), "2404".into(), "1".into(), "0".into()],
+            active: 0,
+            status: ConnectStatus::Idle,
+        }
+    }
+
+    pub fn next(&mut self) {
+        self.active = (self.active + 1) % Self::FIELD_COUNT;
+    }
+
+    pub fn prev(&mut self) {
+        self.active = self.active
+            .checked_sub(1)
+            .unwrap_or(Self::FIELD_COUNT - 1);
+    }
+
+    pub fn push(&mut self, c: char) {
+        if self.active == 0 || c.is_ascii_digit() {
+            self.values[self.active].push(c);
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        self.values[self.active].pop();
+    }
+
+    pub fn paste(&mut self, value: &str) {
+        if self.active == 0 {
+            self.values[self.active].push_str(value);
+        } else {
+            self.values[self.active].extend(value.chars().filter(char::is_ascii_digit));
+        }
+    }
+
+    pub fn host(&self) -> &str {
+        &self.values[0]
+    }
+
+    pub fn port(&self) -> u16 {
+        self.values[1].parse().unwrap_or(2404)
+    }
+
+    pub fn common_address(&self) -> u16 {
+        self.values[2].parse().unwrap_or(1)
+    }
+
+    pub fn originator_address(&self) -> u8 {
+        self.values[3].parse().unwrap_or(0)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.values[0].trim().is_empty() {
+            return Err("Host cannot be empty".into());
+        }
+        match self.values[1].parse::<u16>() {
+            Ok(1..=u16::MAX) => {}
+            _ => return Err("Port must be between 1 and 65535".into()),
+        }
+        if self.values[2].parse::<u16>().is_err() {
+            return Err("Common address must be between 0 and 65535".into());
+        }
+        if self.values[3].parse::<u8>().is_err() {
+            return Err("Originator address must be between 0 and 255".into());
+        }
+        Ok(())
+    }
 }
 
 // ── OpcUaForm ───────────────────────────────────────────────────────────────

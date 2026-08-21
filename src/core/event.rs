@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use super::state::MqttMessage;
+use super::state::{Iec104Direction, MqttMessage};
 
 #[derive(Debug)]
 pub enum AppEvent {
@@ -24,6 +24,12 @@ pub enum AppEvent {
     },
     /// A line of text received from a serial port.
     SerialLine(String),
+    /// A decoded IEC104 APDU sent or received by the client.
+    Iec104Frame {
+        direction: Iec104Direction,
+        raw: Vec<u8>,
+        summary: String,
+    },
     Connected,
     Disconnected,
     Error(String),

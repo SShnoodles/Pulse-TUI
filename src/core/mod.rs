@@ -4,10 +4,10 @@ mod state;
 
 pub use event::AppEvent;
 pub use mode::{
-    AppMode, ConnectForm, ConnectStatus, DisplayFormat, FunctionCode, ModbusForm, MqttVersion,
-    OpcUaForm, SerialForm, SourceKind,
+    AppMode, ConnectForm, ConnectStatus, DisplayFormat, FunctionCode, Iec104Form, ModbusForm,
+    MqttVersion, OpcUaForm, SerialForm, SourceKind,
 };
 pub use state::{
-    AppState, Message, ModbusRow, MqttMessage, OpcUaRow, SerialDirection, SerialDisplayFormat,
-    SerialEntry,
+    AppState, Iec104Direction, Iec104Entry, Message, ModbusRow, MqttMessage, OpcUaRow,
+    SerialDirection, SerialDisplayFormat, SerialEntry,
 };

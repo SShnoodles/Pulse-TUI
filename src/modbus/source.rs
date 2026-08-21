@@ -167,4 +167,3 @@ async fn poll_registers(
         }
     }
 }
-

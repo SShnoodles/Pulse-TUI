@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::core::{ConnectForm, ConnectStatus, ModbusForm, OpcUaForm, SerialForm};
+use crate::core::{ConnectForm, ConnectStatus, Iec104Form, ModbusForm, OpcUaForm, SerialForm};
 
 pub fn draw_connect(frame: &mut Frame, form: &ConnectForm) {
     let modal = centered_rect(56, 21, frame.area());
@@ -291,7 +291,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 // ── Source select screen ──────────────────────────────────────────────────────────
 
 pub fn draw_source_select(frame: &mut Frame, selected: usize) {
-    let modal = centered_rect(52, 14, frame.area());
+    let modal = centered_rect(52, 15, frame.area());
     frame.render_widget(
         Block::new()
             .borders(Borders::ALL)
@@ -312,6 +312,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         Constraint::Length(1), // option 2
         Constraint::Length(1), // option 3
         Constraint::Length(1), // option 4
+        Constraint::Length(1), // option 5
         Constraint::Min(0),    // spacer
         Constraint::Length(1), // hint
     ])
@@ -337,6 +338,7 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
         ("  B  ", "Modbus TCP"),
         ("  M  ", "MQTT"),
         ("  O  ", "OPC UA"),
+        ("  I  ", "IEC 104"),
         ("  S  ", "Serial"),
     ];
     for (i, (key_label, name)) in options.iter().enumerate() {
@@ -375,6 +377,8 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
             Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("O", Style::new().fg(Color::Cyan)),
             Span::styled("/", Style::new().fg(Color::DarkGray)),
+            Span::styled("I", Style::new().fg(Color::Cyan)),
+            Span::styled("/", Style::new().fg(Color::DarkGray)),
             Span::styled("S", Style::new().fg(Color::Cyan)),
             Span::styled("  select   ", Style::new().fg(Color::DarkGray)),
             Span::styled("Enter", Style::new().fg(Color::Cyan)),
@@ -382,8 +386,90 @@ pub fn draw_source_select(frame: &mut Frame, selected: usize) {
             Span::styled("q", Style::new().fg(Color::Cyan)),
             Span::styled("  quit", Style::new().fg(Color::DarkGray)),
         ])),
-        chunks[7],
+        chunks[8],
     );
+}
+
+// ── IEC 60870-5-104 connect form ────────────────────────────────────────────
+
+pub fn draw_iec104_connect(frame: &mut Frame, form: &Iec104Form) {
+    let modal = centered_rect(60, 19, frame.area());
+    frame.render_widget(
+        Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(Color::Cyan)),
+        modal,
+    );
+    let inner = Rect {
+        x: modal.x + 2,
+        y: modal.y + 1,
+        width: modal.width.saturating_sub(4),
+        height: modal.height.saturating_sub(2),
+    };
+    let chunks = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "● PULSE TUI",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            Line::from(Span::styled(
+                "IEC 104 Connection",
+                Style::new().fg(Color::DarkGray),
+            ))
+            .alignment(Alignment::Center),
+        ]),
+        chunks[0],
+    );
+
+    let is_editing = matches!(form.status, ConnectStatus::Idle | ConnectStatus::Error(_));
+    for (index, chunk) in chunks[1..=4].iter().enumerate() {
+        draw_field(
+            frame,
+            *chunk,
+            Iec104Form::LABELS[index],
+            &form.values[index],
+            index == form.active && is_editing,
+            false,
+        );
+    }
+
+    let status_line = match &form.status {
+        ConnectStatus::Connecting => Line::from(vec![
+            Span::styled("⠇ ", Style::new().fg(Color::Yellow)),
+            Span::styled(
+                "Connecting and sending STARTDT…  ",
+                Style::new().fg(Color::Yellow),
+            ),
+            Span::styled("Esc ", Style::new().fg(Color::Cyan)),
+            Span::styled("cancel", Style::new().fg(Color::DarkGray)),
+        ]),
+        ConnectStatus::Error(error) => Line::from(vec![
+            Span::styled("✗ ", Style::new().fg(Color::Red)),
+            Span::styled(error.clone(), Style::new().fg(Color::Red)),
+        ]),
+        ConnectStatus::Idle => Line::from(vec![
+            Span::styled("Tab/↑↓", Style::new().fg(Color::Cyan)),
+            Span::styled(" navigate   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::new().fg(Color::Cyan)),
+            Span::styled(" connect   ", Style::new().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::new().fg(Color::Cyan)),
+            Span::styled(" back", Style::new().fg(Color::DarkGray)),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(status_line), chunks[6]);
 }
 
 // ── Modbus TCP connect form ───────────────────────────────────────────────────

@@ -63,6 +63,27 @@ pub struct ModbusPersistedConfig {
     pub poll_interval_ms: u64,
 }
 
+/// Persisted IEC104 client settings → [iec104] in ~/.pulse-tui.toml
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Iec104PersistedConfig {
+    pub host: String,
+    pub port: u16,
+    pub common_address: u16,
+    pub originator_address: u8,
+}
+
+impl Default for Iec104PersistedConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".into(),
+            port: 2404,
+            common_address: 1,
+            originator_address: 0,
+        }
+    }
+}
+
 /// Persisted settings for the OPC UA source  →  [opcua] in ~/.pulse-tui.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -108,6 +129,7 @@ pub struct SavedConfig {
     pub mqtt: MqttConfig,
     pub modbus: ModbusPersistedConfig,
     pub opcua: OpcUaPersistedConfig,
+    pub iec104: Iec104PersistedConfig,
     pub serial: SerialPersistedConfig,
 }
 

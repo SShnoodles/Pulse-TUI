@@ -18,6 +18,12 @@ endpoint_url = "opc.tcp://localhost:4840"
 node_ids = []
 poll_interval_ms = 1000
 
+[iec104]
+host = "localhost"
+port = 2404
+common_address = 1
+originator_address = 0
+
 [serial]
 port      = "/dev/ttyUSB0"
 baud_rate = 9600

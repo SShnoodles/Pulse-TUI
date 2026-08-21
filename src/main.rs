@@ -1,6 +1,7 @@
 mod config;
 mod core;
 mod events;
+mod iec104;
 mod modbus;
 mod mqtt;
 mod opcua;
@@ -11,8 +12,8 @@ use std::{io::stdout, time::Duration};
 
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEventKind, KeyModifiers,
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -22,17 +23,19 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     core::{
-        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, ModbusForm, ModbusRow, OpcUaForm,
-        SerialDisplayFormat, SerialEntry, SerialForm, SourceKind,
+        AppEvent, AppMode, AppState, ConnectForm, ConnectStatus, Iec104Entry, Iec104Form,
+        ModbusForm, ModbusRow, OpcUaForm, SerialDisplayFormat, SerialEntry, SerialForm, SourceKind,
     },
     events::{new_event_channel, EventTx},
+    iec104::{Iec104Command, Iec104Config, Iec104Source},
     modbus::{ModbusCommand, ModbusConfig, ModbusSource},
     mqtt::{MqttCommand, MqttConfig, MqttSource},
     opcua::{OpcUaCommand, OpcUaConfig, OpcUaSource},
     serial::{SerialCommand, SerialConfig, SerialSource},
     ui::{
-        draw, draw_connect, draw_modbus_connect, draw_modbus_monitor, draw_opcua_connect,
-        draw_opcua_monitor, draw_serial_connect, draw_serial_monitor, draw_source_select, Panel,
+        draw, draw_connect, draw_iec104_connect, draw_iec104_monitor, draw_modbus_connect,
+        draw_modbus_monitor, draw_opcua_connect, draw_opcua_monitor, draw_serial_connect,
+        draw_serial_monitor, draw_source_select, Panel,
     },
 };
 
@@ -49,12 +52,7 @@ fn random_hex_suffix() -> String {
 async fn main() -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    )?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -64,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture,
         DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
@@ -91,6 +88,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
     let mut modbus_cmd: Option<UnboundedSender<ModbusCommand>> = None;
     let mut opcua_cmd: Option<UnboundedSender<OpcUaCommand>> = None;
     let mut serial_cmd: Option<UnboundedSender<SerialCommand>> = None;
+    let mut iec104_cmd: Option<UnboundedSender<Iec104Command>> = None;
     let mut modbus_form = ModbusForm::new();
     modbus_form.values[0] = saved.modbus.host.clone();
     modbus_form.values[1] = saved.modbus.port.to_string();
@@ -126,6 +124,12 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
     } else {
         vec![]
     };
+
+    let mut iec104_form = Iec104Form::new();
+    iec104_form.values[0] = saved.iec104.host.clone();
+    iec104_form.values[1] = saved.iec104.port.to_string();
+    iec104_form.values[2] = saved.iec104.common_address.to_string();
+    iec104_form.values[3] = saved.iec104.originator_address.to_string();
 
     // Tick task
     let tick_tx = tx.clone();
@@ -183,6 +187,9 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
             AppMode::OpcUaConnect | AppMode::OpcUaConnecting => {
                 terminal.draw(|f| draw_opcua_connect(f, &opcua_form))?;
             }
+            AppMode::Iec104Connect | AppMode::Iec104Connecting => {
+                terminal.draw(|f| draw_iec104_connect(f, &iec104_form))?;
+            }
             AppMode::Monitor => {
                 if state.source_kind == SourceKind::ModbusTcp {
                     terminal.draw(|f| draw_modbus_monitor(f, &state))?;
@@ -190,6 +197,8 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                     terminal.draw(|f| draw_opcua_monitor(f, &state))?;
                 } else if state.source_kind == SourceKind::Serial {
                     terminal.draw(|f| draw_serial_monitor(f, &state))?;
+                } else if state.source_kind == SourceKind::Iec104 {
+                    terminal.draw(|f| draw_iec104_monitor(f, &state))?;
                 } else {
                     terminal.draw(|f| draw(f, &state, active_panel))?;
                 }
@@ -279,6 +288,25 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         state.serial_line_offset = state.serial_lines.len().saturating_sub(1);
                     }
                 }
+                AppEvent::Iec104Frame {
+                    direction,
+                    raw,
+                    summary,
+                } => {
+                    if matches!(mode, AppMode::Monitor | AppMode::Iec104Connecting)
+                        && state.source_kind == SourceKind::Iec104
+                        && !state.iec104_paused
+                    {
+                        state
+                            .iec104_entries
+                            .push(Iec104Entry::new(direction, raw, summary));
+                        if state.iec104_entries.len() > 2000 {
+                            state.iec104_entries.remove(0);
+                        }
+                        // Live capture always follows the newest APDU.
+                        state.iec104_offset = 0;
+                    }
+                }
                 AppEvent::Connected => {
                     state.connected = true;
                     state.last_error = None;
@@ -298,6 +326,10 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         AppMode::SerialConnecting => {
                             mode = AppMode::Monitor;
                             serial_form.status = ConnectStatus::Idle;
+                        }
+                        AppMode::Iec104Connecting => {
+                            mode = AppMode::Monitor;
+                            iec104_form.status = ConnectStatus::Idle;
                         }
                         _ => {}
                     }
@@ -321,10 +353,17 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             mode = AppMode::SerialConnect;
                             serial_form.status = ConnectStatus::Idle;
                         }
+                        AppMode::Iec104Connecting => {
+                            iec104_cmd = None;
+                            mode = AppMode::Iec104Connect;
+                        }
                         AppMode::Monitor if state.source_kind == SourceKind::OpcUa => {
                             state.connected = false;
                         }
                         AppMode::Monitor if state.source_kind == SourceKind::Serial => {
+                            state.connected = false;
+                        }
+                        AppMode::Monitor if state.source_kind == SourceKind::Iec104 => {
                             state.connected = false;
                         }
                         _ => {}
@@ -335,6 +374,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                     AppMode::ModbusConnecting => modbus_form.status = ConnectStatus::Error(e),
                     AppMode::OpcUaConnecting => opcua_form.status = ConnectStatus::Error(e),
                     AppMode::SerialConnecting => serial_form.status = ConnectStatus::Error(e),
+                    AppMode::Iec104Connecting => iec104_form.status = ConnectStatus::Error(e),
                     _ => state.last_error = Some(e),
                 },
 
@@ -347,12 +387,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         opcua_form.paste(&s);
                     } else if mode == AppMode::SerialConnect {
                         serial_form.paste(&s);
+                    } else if mode == AppMode::Iec104Connect {
+                        iec104_form.paste(&s);
                     } else if state.opcua_add_node_mode {
                         state.opcua_add_node_input.push_str(&s);
                     } else if state.opcua_delete_node_mode {
                         state.opcua_delete_node_input.push_str(&s);
                     } else if state.serial_write_mode {
                         state.serial_write_input.push_str(&s);
+                    } else if state.iec104_write_mode {
+                        state.iec104_write_input.push_str(&s);
                     } else if state.publish_mode {
                         state.publish_input.push_str(&s);
                     } else if state.subscribe_mode {
@@ -367,15 +411,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
                         | (KeyModifiers::NONE, KeyCode::Char('q')) => break 'main,
                         (KeyModifiers::NONE, KeyCode::Up) => {
-                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(3);
+                            source_select_idx = source_select_idx.checked_sub(1).unwrap_or(4);
                         }
                         (KeyModifiers::NONE, KeyCode::Down) => {
-                            source_select_idx = (source_select_idx + 1) % 4;
+                            source_select_idx = (source_select_idx + 1) % 5;
                         }
                         (KeyModifiers::NONE, KeyCode::Enter) => match source_select_idx {
                             0 => mode = AppMode::ModbusConnect,
                             1 => mode = AppMode::Connect,
                             2 => mode = AppMode::OpcUaConnect,
+                            3 => mode = AppMode::Iec104Connect,
                             _ => mode = AppMode::SerialConnect,
                         },
                         (KeyModifiers::NONE, KeyCode::Char('s'))
@@ -393,6 +438,11 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         (KeyModifiers::NONE, KeyCode::Char('b'))
                         | (KeyModifiers::NONE, KeyCode::Char('4')) => {
                             mode = AppMode::ModbusConnect;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char('i'))
+                        | (KeyModifiers::SHIFT, KeyCode::Char('I'))
+                        | (KeyModifiers::NONE, KeyCode::Char('5')) => {
+                            mode = AppMode::Iec104Connect;
                         }
                         _ => {}
                     },
@@ -423,6 +473,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
                                 },
                                 opcua: saved.opcua.clone(),
+                                iec104: saved.iec104.clone(),
                                 serial: saved.serial.clone(),
                             });
                             state.mqtt_version = "Modbus TCP";
@@ -472,6 +523,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     poll_interval_ms: opcua_form.values[1].parse().unwrap_or(1000),
                                     username: opcua_form.values[2].clone(),
                                 },
+                                iec104: saved.iec104.clone(),
                                 serial: saved.serial.clone(),
                             });
                             state.broker = opcua_form.values[0].clone();
@@ -506,6 +558,65 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                         _ => {}
                     },
 
+                    AppMode::Iec104Connect => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
+                        | (KeyModifiers::NONE, KeyCode::Down) => iec104_form.next(),
+                        (KeyModifiers::SHIFT, KeyCode::BackTab)
+                        | (KeyModifiers::NONE, KeyCode::Up) => iec104_form.prev(),
+                        (KeyModifiers::NONE, KeyCode::Backspace) => {
+                            iec104_form.backspace();
+                            iec104_form.status = ConnectStatus::Idle;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Enter) => {
+                            if let Err(error) = iec104_form.validate() {
+                                iec104_form.status = ConnectStatus::Error(error);
+                                continue;
+                            }
+                            config::save(&config::SavedConfig {
+                                mqtt: saved.mqtt.clone(),
+                                modbus: saved.modbus.clone(),
+                                opcua: saved.opcua.clone(),
+                                iec104: config::Iec104PersistedConfig {
+                                    host: iec104_form.host().to_string(),
+                                    port: iec104_form.port(),
+                                    common_address: iec104_form.common_address(),
+                                    originator_address: iec104_form.originator_address(),
+                                },
+                                serial: saved.serial.clone(),
+                            });
+                            state.broker = format!("{}:{}", iec104_form.host(), iec104_form.port());
+                            state.mqtt_version = "IEC 104";
+                            state.source_kind = SourceKind::Iec104;
+                            state.iec104_entries.clear();
+                            state.iec104_offset = 0;
+                            state.iec104_paused = false;
+                            state.iec104_write_mode = false;
+                            state.iec104_write_input.clear();
+                            iec104_form.status = ConnectStatus::Connecting;
+                            iec104_cmd = Some(spawn_iec104(&iec104_form, &tx));
+                            mode = AppMode::Iec104Connecting;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            mode = AppMode::SourceSelect;
+                        }
+                        (KeyModifiers::NONE, KeyCode::Char(character)) => {
+                            iec104_form.push(character);
+                            iec104_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
+                    AppMode::Iec104Connecting => match (key.modifiers, key.code) {
+                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                        (KeyModifiers::NONE, KeyCode::Esc) => {
+                            iec104_cmd = None;
+                            mode = AppMode::Iec104Connect;
+                            iec104_form.status = ConnectStatus::Idle;
+                        }
+                        _ => {}
+                    },
+
                     AppMode::SerialConnect => match (key.modifiers, key.code) {
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
                         (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
@@ -531,6 +642,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     mqtt: saved.mqtt.clone(),
                                     modbus: saved.modbus.clone(),
                                     opcua: saved.opcua.clone(),
+                                    iec104: saved.iec104.clone(),
                                     serial: config::SerialPersistedConfig {
                                         port: port.clone(),
                                         baud_rate: serial_form.baud_rate(),
@@ -605,6 +717,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                     poll_interval_ms: modbus_form.values[3].parse().unwrap_or(1000),
                                 },
                                 opcua: saved.opcua.clone(),
+                                iec104: saved.iec104.clone(),
                                 serial: saved.serial.clone(),
                             });
                             state.subscribed_topics = initial_topics.clone();
@@ -700,6 +813,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                 drop(modbus_cmd.take());
                                 drop(opcua_cmd.take());
                                 drop(serial_cmd.take());
+                                drop(iec104_cmd.take());
                                 break 'main;
                             }
                             (KeyModifiers::NONE, KeyCode::Char('w')) => {
@@ -721,6 +835,48 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             }
                             (KeyModifiers::NONE, KeyCode::Esc) => {
                                 state.confirm_back = true;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // ── IEC104 monitor: raw APDU input ─────────────────────
+                    AppMode::Monitor
+                        if state.source_kind == SourceKind::Iec104 && state.iec104_write_mode =>
+                    {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.iec104_write_mode = false;
+                                state.iec104_write_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Enter) => {
+                                let input = state.iec104_write_input.trim();
+                                if !input.is_empty() {
+                                    match parse_hex_input(input) {
+                                        Some(frame) => {
+                                            if let Some(ref command_tx) = iec104_cmd {
+                                                let _ =
+                                                    command_tx.send(Iec104Command::SendRaw(frame));
+                                            }
+                                        }
+                                        None => {
+                                            state.last_error =
+                                                Some("Invalid hexadecimal APDU".into());
+                                        }
+                                    }
+                                }
+                                state.iec104_write_mode = false;
+                                state.iec104_write_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                                state.iec104_write_input.pop();
+                            }
+                            (
+                                KeyModifiers::NONE | KeyModifiers::SHIFT,
+                                KeyCode::Char(character),
+                            ) if character.is_ascii_hexdigit() || character == ' ' => {
+                                state.iec104_write_input.push(character);
                             }
                             _ => {}
                         }
@@ -813,6 +969,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                 drop(modbus_cmd.take());
                                 drop(opcua_cmd.take());
                                 drop(serial_cmd.take());
+                                drop(iec104_cmd.take());
                                 break 'main;
                             }
                             (KeyModifiers::NONE, KeyCode::Char('e')) => {
@@ -849,6 +1006,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             drop(modbus_cmd.take());
                             drop(opcua_cmd.take());
                             drop(serial_cmd.take());
+                            drop(iec104_cmd.take());
                             break 'main;
                         }
                         (KeyModifiers::NONE, KeyCode::Char('y'))
@@ -857,17 +1015,65 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             modbus_cmd = None;
                             opcua_cmd = None;
                             serial_cmd = None;
+                            iec104_cmd = None;
                             state = AppState::default();
                             mode = AppMode::SourceSelect;
                             form.status = ConnectStatus::Idle;
                             modbus_form.status = ConnectStatus::Idle;
                             opcua_form.status = ConnectStatus::Idle;
                             serial_form.status = ConnectStatus::Idle;
+                            iec104_form.status = ConnectStatus::Idle;
                         }
                         _ => {
                             state.confirm_back = false;
                         }
                     },
+
+                    // ── IEC104 monitor: normal navigation ──────────────────
+                    AppMode::Monitor if state.source_kind == SourceKind::Iec104 => {
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => break 'main,
+                            (KeyModifiers::NONE, KeyCode::Char('q')) => {
+                                drop(iec104_cmd.take());
+                                break 'main;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('g')) => {
+                                if let Some(ref command_tx) = iec104_cmd {
+                                    let _ = command_tx.send(Iec104Command::GeneralInterrogation);
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('w')) => {
+                                state.iec104_write_mode = true;
+                                state.iec104_write_input.clear();
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char(' ')) => {
+                                state.iec104_paused = !state.iec104_paused;
+                                if !state.iec104_paused {
+                                    state.iec104_offset = 0;
+                                }
+                            }
+                            (KeyModifiers::NONE, KeyCode::Up)
+                                if state.iec104_paused || !state.connected =>
+                            {
+                                let max = state.iec104_entries.len().saturating_sub(1);
+                                state.iec104_offset = (state.iec104_offset + 1).min(max);
+                            }
+                            (KeyModifiers::NONE, KeyCode::Down)
+                                if state.iec104_paused || !state.connected =>
+                            {
+                                state.iec104_offset = state.iec104_offset.saturating_sub(1);
+                            }
+                            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                                state.iec104_entries.clear();
+                                state.iec104_offset = 0;
+                                state.last_error = None;
+                            }
+                            (KeyModifiers::NONE, KeyCode::Esc) => {
+                                state.confirm_back = true;
+                            }
+                            _ => {}
+                        }
+                    }
 
                     // ── OPC UA monitor: add NodeId mode ───────────────────
                     AppMode::Monitor
@@ -974,6 +1180,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                                 drop(modbus_cmd.take());
                                 drop(opcua_cmd.take());
                                 drop(serial_cmd.take());
+                                drop(iec104_cmd.take());
                                 break 'main;
                             }
                             (KeyModifiers::NONE, KeyCode::Up) => {
@@ -1114,6 +1321,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> anyh
                             drop(modbus_cmd.take());
                             drop(opcua_cmd.take());
                             drop(serial_cmd.take());
+                            drop(iec104_cmd.take());
                             break 'main;
                         }
                         (KeyModifiers::NONE, KeyCode::Char(' '))
@@ -1221,6 +1429,18 @@ fn spawn_modbus(form: &ModbusForm, tx: &EventTx) -> UnboundedSender<ModbusComman
     let (source, cmd_tx) = ModbusSource::new(config, tx.clone());
     tokio::spawn(source.run());
     cmd_tx
+}
+
+fn spawn_iec104(form: &Iec104Form, tx: &EventTx) -> UnboundedSender<Iec104Command> {
+    let config = Iec104Config {
+        host: form.host().to_string(),
+        port: form.port(),
+        common_address: form.common_address(),
+        originator_address: form.originator_address(),
+    };
+    let (source, command_tx) = Iec104Source::new(config, tx.clone());
+    tokio::spawn(source.run());
+    command_tx
 }
 
 // Parse space-separated hex tokens ("41 42 43") into bytes. Returns None on any invalid token.
